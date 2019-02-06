@@ -34,6 +34,12 @@
 
 -define(HEARTBEAT_INTERVAL, timer:seconds(1)).
 
+-ifdef(EUNIT).
+-define(RPC, rpc).
+-else.
+-define(RPC, gen_rpc).
+-endif.
+
 start(#{address := Remote}) ->
     case poke(Remote) of
         ok ->
@@ -60,7 +66,7 @@ stop(Pid, _Remote) when is_pid(Pid) ->
 -spec send(node(), batch()) -> {ok, batch_ref()} | {error, any()}.
 send(Remote, Batch) ->
     Sender = self(),
-    case gen_rpc:call(Remote, ?MODULE, handle_send, [Sender, Batch]) of
+    case ?RPC:call(Remote, ?MODULE, handle_send, [Sender, Batch]) of
         {ok, Ref} -> {ok, Ref};
         {badrpc, Reason} -> {error, Reason}
     end.
@@ -70,7 +76,7 @@ send(Remote, Batch) ->
 handle_send(SenderPid, Batch) ->
     SenderNode = node(SenderPid),
     Ref = make_ref(),
-    AckFun = fun() -> gen_rpc:cast(SenderNode, ?MODULE, handle_ack, [SenderPid, Ref]), ok end,
+    AckFun = fun() -> ?RPC:cast(SenderNode, ?MODULE, handle_ack, [SenderPid, Ref]), ok end,
     case emqx_portal:import_batch(Batch, AckFun) of
         ok -> {ok, Ref};
         Error -> Error
@@ -97,7 +103,7 @@ heartbeat(Parent, RemoteNode) ->
     end.
 
 poke(Node) ->
-    case gen_rpc:call(Node, erlang, node, []) of
+    case ?RPC:call(Node, erlang, node, []) of
         Node -> ok;
         {badrpc, Reason} -> {error, Reason}
     end.
