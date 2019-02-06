@@ -34,11 +34,7 @@
 
 -define(HEARTBEAT_INTERVAL, timer:seconds(1)).
 
--ifdef(EUNIT).
--define(RPC, rpc).
--else.
 -define(RPC, gen_rpc).
--endif.
 
 start(#{address := Remote}) ->
     case poke(Remote) of

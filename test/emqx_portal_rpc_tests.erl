@@ -15,12 +15,18 @@
 -module(emqx_portal_rpc_tests).
 -include_lib("eunit/include/eunit.hrl").
 
-start_stop_test() ->
-    {ok, Pid, Node} = emqx_portal_rpc:start(#{address => node()}),
-    ok = emqx_portal_rpc:stop(Pid, Node).
-
 send_and_ack_test() ->
-    meck:new(emqx_portal, [passthrough]),
+    %% delegate from gen_rpc to rpc for unit test
+    meck:new(gen_rpc, [passthrough, no_history]),
+    meck:expect(gen_rpc, call, 4,
+                fun(Node, Module, Fun, Args) ->
+                        rpc:call(Node, Module, Fun, Args)
+                end),
+    meck:expect(gen_rpc, cast, 4,
+                fun(Node, Module, Fun, Args) ->
+                        rpc:cast(Node, Module, Fun, Args)
+                end),
+    meck:new(emqx_portal, [passthrough, no_history]),
     meck:expect(emqx_portal, import_batch, 2,
                 fun(batch, AckFun) -> AckFun() end),
     try
@@ -32,5 +38,6 @@ send_and_ack_test() ->
         end,
         ok = emqx_portal_rpc:stop(Pid, Node)
     after
+        meck:unload(gen_rpc),
         meck:unload(emqx_portal)
     end.
