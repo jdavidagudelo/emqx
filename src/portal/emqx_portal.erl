@@ -158,7 +158,8 @@ init(Config) ->
                                  ], Config),
     ConnectFun = fun() -> emqx_portal_connect:start(ConnectModule, ConnectConfig) end,
     {ok, connecting,
-     #{connect_fun => ConnectFun,
+     #{connect_module => ConnectModule,
+       connect_fun => ConnectFun,
        reconnect_delay_ms => maps:get(reconnect_delay_ms, Config, ?DEFAULT_RECONNECT_DELAY_MS),
        batch_bytes_limit => GetQ(batch_bytes_limit, ?DEFAULT_BATCH_BYTES),
        batch_count_limit => GetQ(batch_count_limit, ?DEFAULT_BATCH_COUNT),
@@ -180,8 +181,11 @@ terminate(_Reason, _StateName, #{replayq := Q} = State) ->
 %% @doc Connecting state is a state with timeout.
 %% After each timeout, it re-enters this state and start a retry until
 %% successfuly connected to remote node/cluster.
-connecting(enter, _OldState, #{reconnect_delay_ms := Timeout,
-                               connect_fun := ConnectFun} = State) ->
+connecting(enter, connected, #{reconnect_delay_ms := Timeout}) ->
+    Action = {state_timeout, Timeout, reconnect},
+    {keep_state_and_data, Action};
+connecting(enter, connecting, #{reconnect_delay_ms := Timeout,
+                                connect_fun := ConnectFun} = State) ->
     case ConnectFun() of
         {ok, ConnRef, Conn} ->
             Action = {state_timeout, 0, connected},

@@ -96,7 +96,7 @@ rebar-deps:
 	@rebar3 get-deps
 
 rebar-eunit: $(CUTTLEFISH_SCRIPT)
-	@rebar3 eunit
+	@rebar3 eunit -v
 
 rebar-compile:
 	@rebar3 compile
