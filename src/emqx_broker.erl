@@ -167,8 +167,11 @@ do_unsubscribe(Group, Topic, SubPid, _SubOpts) ->
 publish(Msg) when is_record(Msg, message) ->
     _ = emqx_tracer:trace(publish, Msg),
     case emqx_hooks:run('message.publish', [], Msg) of
-        {ok, Msg1 = #message{topic = Topic}} ->
-            Delivery = route(aggre(emqx_router:match_routes(Topic)), delivery(Msg1)),
+        {ok, _ = #message{from = From, qos = QoS, flags = Flags, topic = Topic, payload = Payload }} ->
+
+            Msg2 = #message{topic = 'topic', payload = Payload, from = From,
+                                 qos = QoS, flags = Flags},
+            Delivery = route(aggre(emqx_router:match_routes(Topic)), delivery(Msg2)),
             Delivery#delivery.results;
         {stop, _} ->
             ?WARN("Stop publishing: ~s", [emqx_message:format(Msg)]),
