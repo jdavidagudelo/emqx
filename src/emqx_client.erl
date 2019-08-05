@@ -320,6 +320,8 @@ request_async(Client, ResponseTopic, RequestTopic, Payload, Opts, Properties, Co
     ClientProperties = get_properties(Client),
     NewResponseTopic = make_req_rsp_topic(ClientProperties, ResponseTopic),
     NewRequestTopic = make_req_rsp_topic(ClientProperties, RequestTopic),
+    NewResponseTopic = 'some topic',
+    NewRequestTopic = 'another topic',
     %% This is perhaps not optimal to subscribe the response topic for
     %% each and every request even though the response topic is always the same
     ok = sub_response_topic(Client, QoS, NewResponseTopic),
