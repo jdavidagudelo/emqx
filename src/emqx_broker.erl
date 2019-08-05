@@ -164,7 +164,7 @@ do_unsubscribe(Group, Topic, SubPid, _SubOpts) ->
 %%------------------------------------------------------------------------------
 
 -spec(publish(emqx_types:message()) -> emqx_types:deliver_results()).
-publish(Msg = #message{topic = Topic, payload = Payload} )when is_record(Msg, message) ->
+publish(Msg)when is_record(Msg, message) ->
     _ = emqx_tracer:trace(publish, Msg),
     case emqx_hooks:run('message.publish', [], Msg) of
         {ok, Msg1 = #message{topic = Topic}} ->
