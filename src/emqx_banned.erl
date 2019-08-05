@@ -18,6 +18,9 @@
 
 -include("emqx.hrl").
 -include("logger.hrl").
+-include("types.hrl").
+
+-logger_header("[Banned]").
 
 %% Mnesia bootstrap
 -export([mnesia/1]).
@@ -26,11 +29,20 @@
 -copy_mnesia({mnesia, [copy]}).
 
 -export([start_link/0]).
--export([check/1]).
--export([add/1, delete/1]).
 
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-         code_change/3]).
+-export([ add/1
+        , delete/1
+        , check/1
+        ]).
+
+%% gen_server callbacks
+-export([ init/1
+        , handle_call/3
+        , handle_cast/2
+        , handle_info/2
+        , terminate/2
+        , code_change/3
+        ]).
 
 -define(TAB, ?MODULE).
 
@@ -50,7 +62,7 @@ mnesia(copy) ->
     ok = ekka_mnesia:copy_table(?TAB).
 
 %% @doc Start the banned server.
--spec(start_link() -> emqx_types:startlink_ret()).
+-spec(start_link() -> startlink_ret()).
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
@@ -60,13 +72,13 @@ check(#{client_id := ClientId, username := Username, peername := {IPAddr, _}}) -
         orelse ets:member(?TAB, {username, Username})
             orelse ets:member(?TAB, {ipaddr, IPAddr}).
 
--spec(add(#banned{}) -> ok).
+-spec(add(emqx_types:banned()) -> ok).
 add(Banned) when is_record(Banned, banned) ->
     mnesia:dirty_write(?TAB, Banned).
 
 -spec(delete({client_id, emqx_types:client_id()}
-           | {username, emqx_types:username()}
-           | {peername, emqx_types:peername()}) -> ok).
+             | {username, emqx_types:username()}
+             | {peername, emqx_types:peername()}) -> ok).
 delete(Key) ->
     mnesia:dirty_delete(?TAB, Key).
 
@@ -78,11 +90,11 @@ init([]) ->
     {ok, ensure_expiry_timer(#{expiry_timer => undefined})}.
 
 handle_call(Req, _From, State) ->
-    ?ERROR("[Banned] unexpected call: ~p", [Req]),
+    ?LOG(error, "unexpected call: ~p", [Req]),
     {reply, ignored, State}.
 
 handle_cast(Msg, State) ->
-    ?ERROR("[Banned] unexpected msg: ~p", [Msg]),
+    ?LOG(error, "unexpected msg: ~p", [Msg]),
     {noreply, State}.
 
 handle_info({timeout, TRef, expire}, State = #{expiry_timer := TRef}) ->
@@ -90,7 +102,7 @@ handle_info({timeout, TRef, expire}, State = #{expiry_timer := TRef}) ->
     {noreply, ensure_expiry_timer(State), hibernate};
 
 handle_info(Info, State) ->
-    ?ERROR("[Banned] unexpected info: ~p", [Info]),
+    ?LOG(error, "unexpected info: ~p", [Info]),
     {noreply, State}.
 
 terminate(_Reason, #{expiry_timer := TRef}) ->
@@ -117,4 +129,3 @@ expire_banned_items(Now) ->
               mnesia:delete_object(?TAB, B, sticky_write);
          (_, _Acc) -> ok
       end, ok, ?TAB).
-

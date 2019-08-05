@@ -36,7 +36,7 @@ new(WsUrl, PPid) ->
                    addr = Addr,
                    path = "/" ++ Path,
                    ppid = PPid},
-    spawn(fun () ->
+    spawn(fun() ->
                   start_conn(State)
           end).
 
@@ -185,7 +185,6 @@ do_close(State = #state{socket = Socket}, {Code, Reason}) ->
     Payload = iolist_to_binary([<<Code:16>>, Reason]),
     gen_tcp:send(Socket, encode_frame(1, 8, Payload)),
     State#state{phase = closing}.
-
 
 loop(State = #state{socket = Socket, ppid = PPid, data = Data,
                     phase = Phase}) ->

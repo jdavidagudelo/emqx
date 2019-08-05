@@ -18,36 +18,57 @@
 
 -include("emqx.hrl").
 -include("logger.hrl").
+-include("types.hrl").
 
+-logger_header("[Zone]").
+
+%% APIs
 -export([start_link/0]).
--export([get_env/2, get_env/3]).
--export([set_env/3]).
--export([force_reload/0]).
+
+-export([ get_env/2
+        , get_env/3
+        , set_env/3
+        , force_reload/0
+        ]).
+
 %% for test
 -export([stop/0]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-         code_change/3]).
+-export([ init/1
+        , handle_call/3
+        , handle_cast/2
+        , handle_info/2
+        , terminate/2
+        , code_change/3
+        ]).
+
+%% dummy state
+-record(state, {}).
 
 -define(TAB, ?MODULE).
 -define(SERVER, ?MODULE).
+-define(KEY(Zone, Key), {?MODULE, Zone, Key}).
 
--spec(start_link() -> emqx_types:startlink_ret()).
+%%------------------------------------------------------------------------------
+%% APIs
+%%------------------------------------------------------------------------------
+
+-spec(start_link() -> startlink_ret()).
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec(get_env(emqx_types:zone() | undefined, atom()) -> undefined | term()).
+-spec(get_env(maybe(emqx_types:zone()), atom()) -> maybe(term())).
 get_env(undefined, Key) ->
     emqx_config:get_env(Key);
 get_env(Zone, Key) ->
     get_env(Zone, Key, undefined).
 
--spec(get_env(emqx_types:zone() | undefined, atom(), term()) -> undefined | term()).
+-spec(get_env(maybe(emqx_types:zone()), atom(), term()) -> maybe(term())).
 get_env(undefined, Key, Def) ->
     emqx_config:get_env(Key, Def);
 get_env(Zone, Key, Def) ->
-    try ets:lookup_element(?TAB, {Zone, Key}, 2)
+    try persistent_term:get(?KEY(Zone, Key))
     catch error:badarg ->
         emqx_config:get_env(Key, Def)
     end.
@@ -69,31 +90,27 @@ stop() ->
 %%------------------------------------------------------------------------------
 
 init([]) ->
-    ok = emqx_tables:new(?TAB, [set, {read_concurrency, true}]),
-    {ok, element(2, handle_info(reload, #{timer => undefined}))}.
+    _ = do_reload(),
+    {ok, #state{}}.
 
 handle_call(force_reload, _From, State) ->
     _ = do_reload(),
     {reply, ok, State};
 
 handle_call(Req, _From, State) ->
-    ?ERROR("[Zone] unexpected call: ~p", [Req]),
+    ?LOG(error, "Unexpected call: ~p", [Req]),
     {reply, ignored, State}.
 
 handle_cast({set_env, Zone, Key, Val}, State) ->
-    true = ets:insert(?TAB, {{Zone, Key}, Val}),
+    ok = persistent_term:put(?KEY(Zone, Key), Val),
     {noreply, State};
 
 handle_cast(Msg, State) ->
-    ?ERROR("[Zone] unexpected cast: ~p", [Msg]),
+    ?LOG(error, "Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-handle_info(reload, State) ->
-    _ = do_reload(),
-    {noreply, ensure_reload_timer(State#{timer := undefined}), hibernate};
-
 handle_info(Info, State) ->
-    ?ERROR("[Zone] unexpected info: ~p", [Info]),
+    ?LOG(error, "Unexpected info: ~p", [Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -107,11 +124,6 @@ code_change(_OldVsn, State, _Extra) ->
 %%------------------------------------------------------------------------------
 
 do_reload() ->
-    [ets:insert(?TAB, [{{Zone, Key}, Val} || {Key, Val} <- Opts])
-     || {Zone, Opts} <- emqx_config:get_env(zones, [])].
-
-ensure_reload_timer(State = #{timer := undefined}) ->
-    State#{timer := erlang:send_after(timer:minutes(5), self(), reload)};
-ensure_reload_timer(State) ->
-    State.
+    [ persistent_term:put(?KEY(Zone, Key), Val)
+      || {Zone, Opts} <- emqx_config:get_env(zones, []), {Key, Val} <- Opts ].
 

@@ -14,34 +14,43 @@
 
 -module(emqx_keepalive).
 
--export([start/3, check/1, cancel/1]).
+%% APIs
+-export([ start/3
+        , check/1
+        , cancel/1
+        ]).
 
 -record(keepalive, {statfun, statval, tsec, tmsg, tref, repeat = 0}).
 
--type(keepalive() :: #keepalive{}).
+-opaque(keepalive() :: #keepalive{}).
 
 -export_type([keepalive/0]).
+
+%%------------------------------------------------------------------------------
+%% APIs
+%%------------------------------------------------------------------------------
 
 %% @doc Start a keepalive
 -spec(start(fun(), integer(), any()) -> {ok, keepalive()} | {error, term()}).
 start(_, 0, _) ->
     {ok, #keepalive{}};
 start(StatFun, TimeoutSec, TimeoutMsg) ->
-    case catch StatFun() of
+    try StatFun() of
         {ok, StatVal} ->
             {ok, #keepalive{statfun = StatFun, statval = StatVal,
                             tsec = TimeoutSec, tmsg = TimeoutMsg,
                             tref = timer(TimeoutSec, TimeoutMsg)}};
         {error, Error} ->
-            {error, Error};
-        {'EXIT', Reason} ->
+            {error, Error}
+    catch
+        _Error:Reason ->
             {error, Reason}
     end.
 
 %% @doc Check keepalive, called when timeout...
 -spec(check(keepalive()) -> {ok, keepalive()} | {error, term()}).
 check(KeepAlive = #keepalive{statfun = StatFun, statval = LastVal, repeat = Repeat}) ->
-    case catch StatFun() of
+    try StatFun() of
         {ok, NewVal} ->
             if NewVal =/= LastVal ->
                     {ok, resume(KeepAlive#keepalive{statval = NewVal, repeat = 0})};
@@ -51,8 +60,9 @@ check(KeepAlive = #keepalive{statfun = StatFun, statval = LastVal, repeat = Repe
                     {error, timeout}
             end;
         {error, Error} ->
-            {error, Error};
-        {'EXIT', Reason} ->
+            {error, Error}
+    catch
+        _Error:Reason ->
             {error, Reason}
     end.
 
@@ -69,4 +79,3 @@ cancel(_) ->
 
 timer(Secs, Msg) ->
     erlang:send_after(timer:seconds(Secs), self(), Msg).
-

@@ -15,12 +15,23 @@
 -module(emqx_mountpoint).
 
 -include("emqx.hrl").
+-include("logger.hrl").
 
--export([mount/2, unmount/2]).
+-logger_header("[Mountpoint]").
+
+-export([ mount/2
+        , unmount/2
+        ]).
+
 -export([replvar/2]).
 
 -type(mountpoint() :: binary()).
+
 -export_type([mountpoint/0]).
+
+%%------------------------------------------------------------------------------
+%% APIs
+%%------------------------------------------------------------------------------
 
 mount(undefined, Any) ->
     Any;
@@ -33,9 +44,12 @@ mount(MountPoint, TopicFilters) when is_list(TopicFilters) ->
 unmount(undefined, Msg) ->
     Msg;
 unmount(MountPoint, Msg = #message{topic = Topic}) ->
-    case catch split_binary(Topic, byte_size(MountPoint)) of
-        {MountPoint, Topic1} -> Msg#message{topic = Topic1};
-        _Other -> Msg
+    try split_binary(Topic, byte_size(MountPoint)) of
+        {MountPoint, Topic1} -> Msg#message{topic = Topic1}
+    catch
+        _Error:Reason ->
+            ?LOG(error, "Unmount error : ~p", [Reason]),
+            Msg
     end.
 
 replvar(undefined, _Vars) ->

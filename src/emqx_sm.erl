@@ -18,18 +18,34 @@
 
 -include("emqx.hrl").
 -include("logger.hrl").
+-include("types.hrl").
 
+-logger_header("[SM]").
+
+%% APIs
 -export([start_link/0]).
 
--export([open_session/1, close_session/1]).
--export([resume_session/2]).
--export([discard_session/1, discard_session/2]).
--export([register_session/1, register_session/2]).
--export([unregister_session/1, unregister_session/2]).
--export([get_session_attrs/1, get_session_attrs/2,
-         set_session_attrs/2, set_session_attrs/3]).
--export([get_session_stats/1, get_session_stats/2,
-         set_session_stats/2, set_session_stats/3]).
+-export([ open_session/1
+        , close_session/1
+        , resume_session/2
+        , discard_session/1
+        , discard_session/2
+        , register_session/1
+        , register_session/2
+        , unregister_session/1
+        , unregister_session/2
+        ]).
+
+-export([ get_session_attrs/1
+        , get_session_attrs/2
+        , set_session_attrs/2
+        , set_session_attrs/3
+        , get_session_stats/1
+        , get_session_stats/2
+        , set_session_stats/2
+        , set_session_stats/3
+        ]).
+
 -export([lookup_session_pids/1]).
 
 %% Internal functions for rpc
@@ -42,8 +58,13 @@
 -export([clean_down/1]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-         code_change/3]).
+-export([ init/1
+        , handle_call/3
+        , handle_cast/2
+        , handle_info/2
+        , terminate/2
+        , code_change/3
+        ]).
 
 -define(SM, ?MODULE).
 
@@ -55,7 +76,11 @@
 
 -define(BATCH_SIZE, 100000).
 
--spec(start_link() -> emqx_types:startlink_ret()).
+%%------------------------------------------------------------------------------
+%% APIs
+%%------------------------------------------------------------------------------
+
+-spec(start_link() -> startlink_ret()).
 start_link() ->
     gen_server:start_link({local, ?SM}, ?MODULE, [], []).
 
@@ -91,7 +116,8 @@ discard_session(ClientId, ConnPid) when is_binary(ClientId) ->
           try emqx_session:discard(SessPid, ConnPid)
           catch
               _:Error:_Stk ->
-                  ?ERROR("[SM] Failed to discard ~p: ~p", [SessPid, Error])
+                  unregister_session(ClientId, SessPid),
+                  ?LOG(warning, "Failed to discard ~p: ~p", [SessPid, Error])
           end
       end, lookup_session_pids(ClientId)).
 
@@ -105,7 +131,7 @@ resume_session(ClientId, SessAttrs = #{conn_pid := ConnPid}) ->
             {ok, SessPid};
         SessPids ->
             [SessPid|StalePids] = lists:reverse(SessPids),
-            ?ERROR("[SM] More than one session found: ~p", [SessPids]),
+            ?LOG(error, "More than one session found: ~p", [SessPids]),
             lists:foreach(fun(StalePid) ->
                               catch emqx_session:discard(StalePid, ConnPid)
                           end, StalePids),
@@ -200,7 +226,11 @@ set_session_stats(ClientId, SessPid, Stats) when is_binary(ClientId), is_pid(Ses
 lookup_session_pids(ClientId) ->
     case emqx_sm_registry:is_enabled() of
         true -> emqx_sm_registry:lookup_session(ClientId);
-        false -> emqx_tables:lookup_value(?SESSION_TAB, ClientId, [])
+        false ->
+            case emqx_tables:lookup_value(?SESSION_TAB, ClientId) of
+                undefined -> [];
+                SessPid when is_pid(SessPid) -> [SessPid]
+            end
     end.
 
 %% @doc Dispatch a message to the session.
@@ -227,15 +257,15 @@ init([]) ->
     {ok, #{}}.
 
 handle_call(Req, _From, State) ->
-    ?ERROR("[SM] unexpected call: ~p", [Req]),
+    ?LOG(error, "Unexpected call: ~p", [Req]),
     {reply, ignored, State}.
 
 handle_cast(Msg, State) ->
-    ?ERROR("[SM] unexpected cast: ~p", [Msg]),
+    ?LOG(error, "Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
 handle_info(Info, State) ->
-    ?ERROR("[SM] unexpected info: ~p", [Info]),
+    ?LOG(error, "Unexpected info: ~p", [Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -257,8 +287,8 @@ clean_down(Session = {ClientId, SessPid}) ->
     end.
 
 stats_fun() ->
-    safe_update_stats(?SESSION_TAB, 'sessions/count', 'sessions/max'),
-    safe_update_stats(?SESSION_P_TAB, 'sessions/persistent/count', 'sessions/persistent/max').
+    safe_update_stats(?SESSION_TAB, 'sessions.count', 'sessions.max'),
+    safe_update_stats(?SESSION_P_TAB, 'sessions.persistent.count', 'sessions.persistent.max').
 
 safe_update_stats(Tab, Stat, MaxStat) ->
     case ets:info(Tab, size) of

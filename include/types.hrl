@@ -12,11 +12,10 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 
--module(emqx_ct_helpers).
+-type(maybe(T) :: undefined | T).
 
--export([ensure_mnesia_stopped/0]).
+-type(startlink_ret() :: {ok, pid()} | ignore | {error, term()}).
 
-ensure_mnesia_stopped() ->
-    ekka_mnesia:ensure_stopped(),
-    ekka_mnesia:delete_schema().
+-type(ok_or_error(Reason) :: ok | {error, Reason}).
 
+-type(ok_or_error(Value, Reason) :: {ok, Value} | {error, Reason}).

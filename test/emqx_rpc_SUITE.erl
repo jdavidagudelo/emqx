@@ -12,15 +12,25 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 
--module(emqx_local_bridge_sup).
+-module(emqx_rpc_SUITE).
 
 -include("emqx.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
--export([start_link/3]).
+-compile(export_all).
+-compile(nowarn_export_all).
+-define(MASTER, 'emqxct@127.0.0.1').
 
--spec(start_link(node(), emqx_topic:topic(), [emqx_local_bridge:option()])
-      -> {ok, pid()} | {error, term()}).
-start_link(Node, Topic, Options) ->
-    MFA = {emqx_local_bridge, start_link, [Node, Topic, Options]},
-    emqx_pool_sup:start_link({bridge, Node, Topic}, random, MFA).
+all() -> [t_rpc].
 
+init_per_suite(Config) ->
+    emqx_ct_helpers:start_apps([]),
+    Config.
+
+end_per_suite(_Config) ->
+    emqx_ct_helpers:stop_apps([]).
+
+t_rpc(_) ->
+    60000 = emqx_rpc:call(?MASTER, timer, seconds, [60]),
+    {badrpc, _} = emqx_rpc:call(?MASTER, os, test, []),
+    {_, []} = emqx_rpc:multicall([?MASTER, ?MASTER], os, timestamp, []).

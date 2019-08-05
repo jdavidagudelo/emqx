@@ -31,39 +31,39 @@ all() ->
     [{group, access_control},
      {group, acl_cache},
      {group, access_control_cache_mode},
-     {group, access_rule}
-     ].
+     {group, access_rule}].
 
 groups() ->
     [{access_control, [sequence],
-       [reload_acl,
-        register_mod,
-        unregister_mod,
-        check_acl_1,
-        check_acl_2
-        ]},
+      [reload_acl,
+       check_acl_1,
+       check_acl_2]},
      {access_control_cache_mode, [],
-       [
-        acl_cache_basic,
-        acl_cache_expiry,
-        acl_cache_cleanup,
-        acl_cache_full
-        ]},
-     {acl_cache, [], [
-       put_get_del_cache,
+      [acl_cache_basic,
+       acl_cache_expiry,
+       acl_cache_cleanup,
+       acl_cache_full]},
+     {acl_cache, [],
+      [put_get_del_cache,
        cache_update,
        cache_expiry,
        cache_replacement,
        cache_cleanup,
        cache_auto_emtpy,
-       cache_auto_cleanup
-     ]},
+       cache_auto_cleanup]},
      {access_rule, [],
-       [compile_rule,
-        match_rule]}].
+      [compile_rule,
+       match_rule]}].
 
-init_per_group(Group, Config) when  Group =:= access_control;
-                                    Group =:= access_control_cache_mode ->
+init_per_suite(Config) ->
+    emqx_ct_helpers:start_apps([]),
+    Config.
+
+end_per_suite(_Config) ->
+    emqx_ct_helpers:stop_apps([]).
+
+init_per_group(Group, Config) when Group =:= access_control;
+                                   Group =:= access_control_cache_mode ->
     prepare_config(Group),
     application:load(emqx),
     Config;
@@ -90,67 +90,32 @@ set_acl_config_file(_Group) ->
     write_config("access_SUITE_acl.conf", Rules),
     application:set_env(emqx, acl_file, "access_SUITE_acl.conf").
 
-
 write_config(Filename, Terms) ->
     file:write_file(Filename, [io_lib:format("~tp.~n", [Term]) || Term <- Terms]).
 
 end_per_group(_Group, Config) ->
     Config.
 
-init_per_testcase(_TestCase, Config) ->
-    %% {ok, _Pid} =
-    ?AC:start_link(),
-    Config.
-end_per_testcase(_TestCase, _Config) ->
-    ok.
-
-per_testcase_config(acl_cache_full, Config) ->
-    Config;
-per_testcase_config(_TestCase, Config) ->
-    Config.
-
-
 %%--------------------------------------------------------------------
 %% emqx_access_control
 %%--------------------------------------------------------------------
 
 reload_acl(_) ->
-    [ok] = ?AC:reload_acl().
-
-register_mod(_) ->
-    ok = ?AC:register_mod(acl, emqx_acl_test_mod, []),
-    {emqx_acl_test_mod, _, 0} = hd(?AC:lookup_mods(acl)),
-    ok = ?AC:register_mod(auth, emqx_auth_anonymous_test_mod,[]),
-    ok = ?AC:register_mod(auth, emqx_auth_dashboard, [], 99),
-    [{emqx_auth_dashboard, _, 99},
-     {emqx_auth_anonymous_test_mod, _, 0}] = ?AC:lookup_mods(auth).
-
-unregister_mod(_) ->
-    ok = ?AC:register_mod(acl, emqx_acl_test_mod, []),
-    {emqx_acl_test_mod, _, 0} = hd(?AC:lookup_mods(acl)),
-    ok = ?AC:unregister_mod(acl, emqx_acl_test_mod),
-    timer:sleep(5),
-    {emqx_acl_internal, _, 0}= hd(?AC:lookup_mods(acl)),
-    ok = ?AC:register_mod(auth, emqx_auth_anonymous_test_mod,[]),
-    [{emqx_auth_anonymous_test_mod, _, 0}] = ?AC:lookup_mods(auth),
-
-    ok = ?AC:unregister_mod(auth, emqx_auth_anonymous_test_mod),
-    timer:sleep(5),
-    [] = ?AC:lookup_mods(auth).
+    ok = ?AC:reload_acl().
 
 check_acl_1(_) ->
-    SelfUser = #{client_id => <<"client1">>, username => <<"testuser">>},
+    SelfUser = #{client_id => <<"client1">>, username => <<"testuser">>, zone => external},
     allow = ?AC:check_acl(SelfUser, subscribe, <<"users/testuser/1">>),
     allow = ?AC:check_acl(SelfUser, subscribe, <<"clients/client1">>),
-    deny = ?AC:check_acl(SelfUser, subscribe, <<"clients/client1/x/y">>),
+    deny  = ?AC:check_acl(SelfUser, subscribe, <<"clients/client1/x/y">>),
     allow = ?AC:check_acl(SelfUser, publish, <<"users/testuser/1">>),
     allow = ?AC:check_acl(SelfUser, subscribe, <<"a/b/c">>).
 check_acl_2(_) ->
-    SelfUser = #{client_id => <<"client2">>, username => <<"xyz">>},
+    SelfUser = #{client_id => <<"client2">>, username => <<"xyz">>, zone => external},
     deny = ?AC:check_acl(SelfUser, subscribe, <<"a/b/c">>).
 
 acl_cache_basic(_) ->
-    SelfUser = #{client_id => <<"client1">>, username => <<"testuser">>},
+    SelfUser = #{client_id => <<"client1">>, username => <<"testuser">>, zone => external},
     not_found = ?CACHE:get_acl_cache(subscribe, <<"users/testuser/1">>),
     not_found = ?CACHE:get_acl_cache(subscribe, <<"clients/client1">>),
 
@@ -163,7 +128,7 @@ acl_cache_basic(_) ->
 
 acl_cache_expiry(_) ->
     application:set_env(emqx, acl_cache_ttl, 100),
-    SelfUser = #{client_id => <<"client1">>, username => <<"testuser">>},
+    SelfUser = #{client_id => <<"client1">>, username => <<"testuser">>, zone => external},
     allow = ?AC:check_acl(SelfUser, subscribe, <<"clients/client1">>),
     allow = ?CACHE:get_acl_cache(subscribe, <<"clients/client1">>),
     ct:sleep(150),
@@ -173,7 +138,7 @@ acl_cache_expiry(_) ->
 acl_cache_full(_) ->
     application:set_env(emqx, acl_cache_max_size, 1),
 
-    SelfUser = #{client_id => <<"client1">>, username => <<"testuser">>},
+    SelfUser = #{client_id => <<"client1">>, username => <<"testuser">>, zone => external},
     allow = ?AC:check_acl(SelfUser, subscribe, <<"users/testuser/1">>),
     allow = ?AC:check_acl(SelfUser, subscribe, <<"clients/client1">>),
 
@@ -188,7 +153,7 @@ acl_cache_cleanup(_) ->
     application:set_env(emqx, acl_cache_ttl, 100),
     application:set_env(emqx, acl_cache_max_size, 2),
 
-    SelfUser = #{client_id => <<"client1">>, username => <<"testuser">>},
+    SelfUser = #{client_id => <<"client1">>, username => <<"testuser">>, zone => external},
     allow = ?AC:check_acl(SelfUser, subscribe, <<"users/testuser/1">>),
     allow = ?AC:check_acl(SelfUser, subscribe, <<"clients/client1">>),
 
@@ -358,8 +323,8 @@ compile_rule(_) ->
     {deny, all} = compile({deny, all}).
 
 match_rule(_) ->
-    User = #{client_id => <<"testClient">>, username => <<"TestUser">>, peername => {{127,0,0,1}, 2948}},
-    User2 = #{client_id => <<"testClient">>, username => <<"TestUser">>, peername => {{192,168,0,10}, 3028}},
+    User = #{client_id => <<"testClient">>, username => <<"TestUser">>, peername => {{127,0,0,1}, 2948}, zone => external},
+    User2 = #{client_id => <<"testClient">>, username => <<"TestUser">>, peername => {{192,168,0,10}, 3028}, zone => external},
 
     {matched, allow} = match(User, <<"Test/Topic">>, {allow, all}),
     {matched, deny} = match(User, <<"Test/Topic">>, {deny, all}),

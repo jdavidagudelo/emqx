@@ -19,6 +19,9 @@
 -include("emqx.hrl").
 -include("emqx_mqtt.hrl").
 -include("logger.hrl").
+-include("types.hrl").
+
+-logger_header("[Shared Sub]").
 
 %% Mnesia bootstrap
 -export([mnesia/1]).
@@ -26,18 +29,32 @@
 -boot_mnesia({mnesia, [boot]}).
 -copy_mnesia({mnesia, [copy]}).
 
+%% APIs
 -export([start_link/0]).
 
--export([subscribe/3, unsubscribe/3]).
+-export([ subscribe/3
+        , unsubscribe/3
+        ]).
+
 -export([dispatch/3]).
--export([maybe_ack/1, maybe_nack_dropped/1, nack_no_connection/1, is_ack_required/1]).
+
+-export([ maybe_ack/1
+        , maybe_nack_dropped/1
+        , nack_no_connection/1
+        , is_ack_required/1
+        ]).
 
 %% for testing
 -export([subscribers/2]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-         code_change/3]).
+-export([ init/1
+        , handle_call/3
+        , handle_cast/2
+        , handle_info/2
+        , terminate/2
+        , code_change/3
+        ]).
 
 -define(SERVER, ?MODULE).
 -define(TAB, emqx_shared_subscription).
@@ -70,19 +87,23 @@ mnesia(copy) ->
 %% API
 %%------------------------------------------------------------------------------
 
--spec(start_link() -> emqx_types:startlink_ret()).
+-spec(start_link() -> startlink_ret()).
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+-spec(subscribe(emqx_topic:group(), emqx_topic:topic(), pid()) -> ok).
 subscribe(Group, Topic, SubPid) when is_pid(SubPid) ->
     gen_server:call(?SERVER, {subscribe, Group, Topic, SubPid}).
 
+-spec(unsubscribe(emqx_topic:group(), emqx_topic:topic(), pid()) -> ok).
 unsubscribe(Group, Topic, SubPid) when is_pid(SubPid) ->
     gen_server:call(?SERVER, {unsubscribe, Group, Topic, SubPid}).
 
 record(Group, Topic, SubPid) ->
     #emqx_shared_subscription{group = Group, topic = Topic, subpid = SubPid}.
 
+-spec(dispatch(emqx_topic:group(), emqx_topic:topic(), emqx_types:delivery())
+      -> emqx_types:delivery()).
 dispatch(Group, Topic, Delivery) ->
     dispatch(Group, Topic, Delivery, _FailedSubs = []).
 
@@ -172,12 +193,12 @@ get_ack_ref(Msg) ->
 -spec(is_ack_required(emqx_types:message()) -> boolean()).
 is_ack_required(Msg) -> ?no_ack =/= get_ack_ref(Msg).
 
-%% @doc Negative ack dropped message due to message queue being full.
+%% @doc Negative ack dropped message due to inflight window or message queue being full.
 -spec(maybe_nack_dropped(emqx_types:message()) -> ok).
 maybe_nack_dropped(Msg) ->
     case get_ack_ref(Msg) of
         ?no_ack -> ok;
-        {Sender, Ref} -> nack(Sender, Ref, drpped)
+        {Sender, Ref} -> nack(Sender, Ref, dropped)
     end.
 
 %% @doc Negative ack message due to connection down.
@@ -291,11 +312,11 @@ handle_call({unsubscribe, Group, Topic, SubPid}, _From, State) ->
     {reply, ok, State};
 
 handle_call(Req, _From, State) ->
-    ?ERROR("[SharedSub] unexpected call: ~p", [Req]),
+    ?LOG(error, "Unexpected call: ~p", [Req]),
     {reply, ignored, State}.
 
 handle_cast(Msg, State) ->
-    ?ERROR("[SharedSub] unexpected cast: ~p", [Msg]),
+    ?LOG(error, "Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
 handle_info({mnesia_table_event, {write, NewRecord, _}}, State = #state{pmon = PMon}) ->
@@ -310,12 +331,12 @@ handle_info({mnesia_table_event, _Event}, State) ->
     {noreply, State};
 
 handle_info({'DOWN', _MRef, process, SubPid, _Reason}, State = #state{pmon = PMon}) ->
-    ?INFO("[SharedSub] shared subscriber down: ~p", [SubPid]),
+    ?LOG(info, "Shared subscriber down: ~p", [SubPid]),
     cleanup_down(SubPid),
     {noreply, update_stats(State#state{pmon = emqx_pmon:erase(SubPid, PMon)})};
 
 handle_info(Info, State) ->
-    ?ERROR("[SharedSub] unexpected info: ~p", [Info]),
+    ?LOG(error, "Unexpected info: ~p", [Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -324,9 +345,9 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%%--------------------------------------------------------------------
+%%------------------------------------------------------------------------------
 %% Internal functions
-%%--------------------------------------------------------------------
+%%------------------------------------------------------------------------------
 
 %% keep track of alive remote pids
 maybe_insert_alive_tab(Pid) when ?IS_LOCAL_PID(Pid) -> ok;
@@ -345,7 +366,7 @@ cleanup_down(SubPid) ->
         end, mnesia:dirty_match_object(#emqx_shared_subscription{_ = '_', subpid = SubPid})).
 
 update_stats(State) ->
-    emqx_stats:setstat('subscriptions/shared/count', 'subscriptions/shared/max', ets:info(?TAB, size)),
+    emqx_stats:setstat('subscriptions.shared.count', 'subscriptions.shared.max', ets:info(?TAB, size)),
     State.
 
 %% Return 'true' if the subscriber process is alive AND not in the failed list

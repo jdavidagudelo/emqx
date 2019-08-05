@@ -14,17 +14,36 @@
 
 -module(emqx_vm).
 
--export([schedulers/0]).
--export([microsecs/0]).
--export([loads/0, get_system_info/0, get_system_info/1,  mem_info/0, scheduler_usage/1]).
--export([get_memory/0]).
--export([get_process_list/0, get_process_info/0, get_process_info/1,
-         get_process_gc/0, get_process_gc/1,
-         get_process_group_leader_info/1,
-         get_process_limit/0]).
--export([get_ets_list/0, get_ets_info/0, get_ets_info/1,
-         get_ets_object/0, get_ets_object/1]).
--export([get_port_types/0, get_port_info/0, get_port_info/1]).
+-export([ schedulers/0
+        , scheduler_usage/1
+        , microsecs/0
+        , get_system_info/0
+        , get_system_info/1
+        , get_memory/0
+        , mem_info/0
+        , loads/0
+        ]).
+
+-export([ get_process_list/0
+        , get_process_info/0
+        , get_process_info/1
+        , get_process_gc/0
+        , get_process_gc/1
+        , get_process_group_leader_info/1
+        , get_process_limit/0
+        ]).
+
+-export([ get_ets_list/0
+        , get_ets_info/0
+        , get_ets_info/1
+        , get_ets_object/0
+        , get_ets_object/1
+        ]).
+
+-export([ get_port_types/0
+        , get_port_info/0
+        , get_port_info/1
+        ]).
 
 -define(UTIL_ALLOCATORS, [temp_alloc,
                           eheap_alloc,
@@ -140,6 +159,8 @@
                       sndbuf,
                       tos]).
 
+-include("emqx.hrl").
+
 schedulers() ->
     erlang:system_info(schedulers).
 
@@ -148,9 +169,9 @@ microsecs() ->
     (Mega * 1000000 + Sec) * 1000000 + Micro.
 
 loads() ->
-    [{load1,  ftos(cpu_sup:avg1()/256)},
-     {load5,  ftos(cpu_sup:avg5()/256)},
-     {load15, ftos(cpu_sup:avg15()/256)}].
+    [{load1,  ftos(?compat_windows(cpu_sup:avg1()/256, 0.0))},
+     {load5,  ftos(?compat_windows(cpu_sup:avg5()/256, 0.0))},
+     {load15, ftos(?compat_windows(cpu_sup:avg15()/256, 0.0))}].
 
 get_system_info() ->
     [{Key, format_system_info(Key, get_system_info(Key))} || Key <- ?SYSTEM_INFO].
@@ -351,30 +372,38 @@ port_info(PortTerm, memory_used) ->
 port_info(PortTerm, specific) ->
     Port = transform_port(PortTerm),
     Props = case erlang:port_info(Port, name) of
-        {_, Type} when Type =:= "udp_inet";
+                {_, Type} when Type =:= "udp_inet";
                        Type =:= "tcp_inet";
                        Type =:= "sctp_inet" ->
-                    case catch inet:getstat(Port) of
+                    try inet:getstat(Port) of
                         {ok, Stats} -> [{statistics, Stats}];
-                        _           -> []
-                    end ++
-                    case catch inet:peername(Port) of
-                        {ok, Peer} -> [{peername, Peer}];
                         {error, _} -> []
+                    catch
+                        _Error:_Reason -> []
                     end ++
-                    case catch inet:sockname(Port) of
+                    try inet:peername(Port) of
+                        {ok, Peer} -> [{peername, Peer}];
+                        _ -> []
+                    catch
+                        _Error:_Reason -> []
+                    end ++
+                    try inet:sockname(Port) of
                         {ok, Local} -> [{sockname, Local}];
                         {error, _}  -> []
+                    catch
+                        _Error:_Reason -> []
                     end ++
-                    case catch inet:getopts(Port, ?SOCKET_OPTS ) of
+                    try inet:getopts(Port, ?SOCKET_OPTS ) of
                         {ok, Opts} -> [{options, Opts}];
                         {error, _} -> []
+                    catch
+                        _Error:_Reason -> []
                     end;
-    {_, "efile"} ->
-        [];
-    _ ->
-        []
-    end,
+                {_, "efile"} ->
+                    [];
+                _ ->
+                    []
+            end,
     {specific, Props};
 port_info(PortTerm, Keys) when is_list(Keys) ->
     Port = transform_port(PortTerm),

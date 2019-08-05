@@ -14,18 +14,26 @@
 
 -module(emqx_modules).
 
--export([load/0, unload/0]).
+-include("logger.hrl").
+
+-logger_header("[Modules]").
+
+-export([ load/0
+        , unload/0
+        ]).
 
 -spec(load() -> ok).
 load() ->
+    ok = emqx_mod_acl_internal:load([]),
     lists:foreach(
       fun({Mod, Env}) ->
         ok = Mod:load(Env),
-        logger:info("Load ~s module successfully.", [Mod])
+        ?LOG(info, "Load ~s module successfully.", [Mod])
       end, emqx_config:get_env(modules, [])).
 
 -spec(unload() -> ok).
 unload() ->
+    ok = emqx_mod_acl_internal:unload([]),
     lists:foreach(
       fun({Mod, Env}) ->
           Mod:unload(Env) end,

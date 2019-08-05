@@ -17,28 +17,39 @@
 -behaviour(gen_server).
 
 -include("logger.hrl").
+-include("types.hrl").
+
+-logger_header("[Session Supervisor]").
 
 -export([start_link/1]).
--export([start_session/1, count_sessions/0]).
+
+-export([ start_session/1
+        , count_sessions/0
+        ]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-         code_change/3]).
+-export([ init/1
+        , handle_call/3
+        , handle_cast/2
+        , handle_info/2
+        , terminate/2
+        , code_change/3
+        ]).
 
 -type(shutdown() :: brutal_kill | infinity | pos_integer()).
 
--record(state, {
-          sessions :: #{pid() => emqx_types:client_id()},
-          mfargs :: mfa(),
-          shutdown :: shutdown(),
-          clean_down :: fun()
-         }).
+-record(state,
+        { sessions :: #{pid() => emqx_types:client_id()}
+        , mfargs :: mfa()
+        , shutdown :: shutdown()
+        , clean_down :: fun()
+        }).
 
 -define(SUP, ?MODULE).
 -define(BATCH_EXIT, 100000).
 
 %% @doc Start session supervisor.
--spec(start_link(map()) -> emqx_types:startlink_ret()).
+-spec(start_link(map()) -> startlink_ret()).
 start_link(SessSpec) when is_map(SessSpec) ->
     gen_server:start_link({local, ?SUP}, ?MODULE, [SessSpec], []).
 
@@ -47,7 +58,7 @@ start_link(SessSpec) when is_map(SessSpec) ->
 %%------------------------------------------------------------------------------
 
 %% @doc Start a session.
--spec(start_session(map()) -> emqx_types:startlink_ret()).
+-spec(start_session(map()) -> startlink_ret()).
 start_session(SessAttrs) ->
     gen_server:call(?SUP, {start_session, SessAttrs}, infinity).
 
@@ -83,7 +94,7 @@ handle_call({start_session, SessAttrs = #{client_id := ClientId}}, _From,
             reply({error, Reason}, State)
     catch
         _:Error:Stk ->
-            ?ERROR("Failed to start session ~p: ~p, stacktrace:~n~p",
+            ?LOG(error, "Failed to start session ~p: ~p, stacktrace:~n~p",
                    [ClientId, Error, Stk]),
             reply({error, Error}, State)
     end;
@@ -92,11 +103,11 @@ handle_call(count_sessions, _From, State = #state{sessions = SessMap}) ->
     {reply, maps:size(SessMap), State};
 
 handle_call(Req, _From, State) ->
-    ?ERROR("unexpected call: ~p", [Req]),
+    ?LOG(error, "Unexpected call: ~p", [Req]),
     {reply, ignored, State}.
 
 handle_cast(Msg, State) ->
-    ?ERROR("unexpected cast: ~p", [Msg]),
+    ?LOG(error, "Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
 handle_info({'EXIT', Pid, _Reason}, State = #state{sessions = SessMap, clean_down = CleanDown}) ->
@@ -108,7 +119,7 @@ handle_info({'EXIT', Pid, _Reason}, State = #state{sessions = SessMap, clean_dow
     {noreply, State#state{sessions = SessMap1}};
 
 handle_info(Info, State) ->
-    ?ERROR("unexpected info: ~p", [Info]),
+    ?LOG(error, "Unexpected info: ~p", [Info]),
     {noreply, State}.
 
 terminate(_Reason, State) ->

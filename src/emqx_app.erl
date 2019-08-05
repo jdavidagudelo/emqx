@@ -16,7 +16,9 @@
 
 -behaviour(application).
 
--export([start/2, stop/1]).
+-export([ start/2
+        , stop/1
+        ]).
 
 -define(APP, emqx).
 
@@ -25,12 +27,6 @@
 %%--------------------------------------------------------------------
 
 start(_Type, _Args) ->
-    %% We'd like to configure the primary logger level here, rather than set the
-    %%   kernel config `logger_level` before starting the erlang vm.
-    %% This is because the latter approach an annoying debug msg will be printed out:
-    %%   "[debug] got_unexpected_message {'EXIT',<0.1198.0>,normal}"
-    logger:set_primary_config(level, application:get_env(emqx, primary_log_level, error)),
-
     print_banner(),
     ekka:start(),
     {ok, Sup} = emqx_sup:start_link(),
@@ -40,11 +36,14 @@ start(_Type, _Args) ->
     emqx_listeners:start(),
     start_autocluster(),
     register(emqx, self()),
+
+    emqx_alarm_handler:load(),
     print_vsn(),
     {ok, Sup}.
 
 -spec(stop(State :: term()) -> term()).
 stop(_State) ->
+    emqx_alarm_handler:unload(),
     emqx_listeners:stop(),
     emqx_modules:unload().
 

@@ -18,20 +18,40 @@
 
 -include("emqx.hrl").
 -include("logger.hrl").
+-include("types.hrl").
+
+-logger_header("[CM]").
 
 -export([start_link/0]).
 
--export([register_connection/1, register_connection/2]).
--export([unregister_connection/1, unregister_connection/2]).
--export([get_conn_attrs/1, get_conn_attrs/2]).
--export([set_conn_attrs/2, set_conn_attrs/3]).
--export([get_conn_stats/1, get_conn_stats/2]).
--export([set_conn_stats/2, set_conn_stats/3]).
+-export([ register_connection/1
+        , register_connection/2
+        , unregister_connection/1
+        , unregister_connection/2
+        ]).
+
+-export([ get_conn_attrs/1
+        , get_conn_attrs/2
+        , set_conn_attrs/2
+        , set_conn_attrs/3
+        ]).
+
+-export([ get_conn_stats/1
+        , get_conn_stats/2
+        , set_conn_stats/2
+        , set_conn_stats/3
+        ]).
+
 -export([lookup_conn_pid/1]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-         code_change/3]).
+-export([ init/1
+        , handle_call/3
+        , handle_cast/2
+        , handle_info/2
+        , terminate/2
+        , code_change/3
+        ]).
 
 %% internal export
 -export([stats_fun/0]).
@@ -46,7 +66,7 @@
 -define(BATCH_SIZE, 100000).
 
 %% @doc Start the connection manager.
--spec(start_link() -> emqx_types:startlink_ret()).
+-spec(start_link() -> startlink_ret()).
 start_link() ->
     gen_server:start_link({local, ?CM}, ?MODULE, [], []).
 
@@ -121,7 +141,7 @@ set_conn_stats(ClientId, ConnPid, Stats) when is_binary(ClientId), is_pid(ConnPi
     ets:insert(?CONN_STATS_TAB, {Conn, Stats}).
 
 %% @doc Lookup connection pid.
--spec(lookup_conn_pid(emqx_types:client_id()) -> pid() | undefined).
+-spec(lookup_conn_pid(emqx_types:client_id()) -> maybe(pid())).
 lookup_conn_pid(ClientId) when is_binary(ClientId) ->
     emqx_tables:lookup_value(?CONN_TAB, ClientId).
 
@@ -141,7 +161,7 @@ init([]) ->
     {ok, #{conn_pmon => emqx_pmon:new()}}.
 
 handle_call(Req, _From, State) ->
-    ?ERROR("[CM] unexpected call: ~p", [Req]),
+    ?LOG(error, "Unexpected call: ~p", [Req]),
     {reply, ignored, State}.
 
 handle_cast({notify, {registered, ClientId, ConnPid}}, State = #{conn_pmon := PMon}) ->
@@ -151,7 +171,7 @@ handle_cast({notify, {unregistered, ConnPid}}, State = #{conn_pmon := PMon}) ->
     {noreply, State#{conn_pmon := emqx_pmon:demonitor(ConnPid, PMon)}};
 
 handle_cast(Msg, State) ->
-    ?ERROR("[CM] unexpected cast: ~p", [Msg]),
+    ?LOG(error, "Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
 handle_info({'DOWN', _MRef, process, Pid, _Reason}, State = #{conn_pmon := PMon}) ->
@@ -162,7 +182,7 @@ handle_info({'DOWN', _MRef, process, Pid, _Reason}, State = #{conn_pmon := PMon}
     {noreply, State#{conn_pmon := PMon1}};
 
 handle_info(Info, State) ->
-    ?ERROR("[CM] unexpected info: ~p", [Info]),
+    ?LOG(error, "Unexpected info: ~p", [Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -187,6 +207,5 @@ clean_down({Pid, ClientId}) ->
 stats_fun() ->
     case ets:info(?CONN_TAB, size) of
         undefined -> ok;
-        Size -> emqx_stats:setstat('connections/count', 'connections/max', Size)
+        Size -> emqx_stats:setstat('connections.count', 'connections.max', Size)
     end.
-

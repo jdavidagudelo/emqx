@@ -1,4 +1,3 @@
-
 %% Copyright (c) 2013-2019 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,14 +24,14 @@
 all() -> [ignore_loop, t_session_all].
 
 init_per_suite(Config) ->
-    emqx_ct_broker_helpers:run_setup_steps(),
+    emqx_ct_helpers:start_apps([]),
     Config.
 
 end_per_suite(_Config) ->
-    emqx_ct_broker_helpers:run_teardown_steps().
+    emqx_ct_helpers:stop_apps([]).
 
 ignore_loop(_Config) ->
-    application:set_env(emqx, mqtt_ignore_loop_deliver, true),
+    emqx_zone:set_env(external, ignore_loop_deliver, true),
     {ok, Client} = emqx_client:start_link(),
     {ok, _} = emqx_client:connect(Client),
     TestTopic = <<"Self">>,
@@ -42,10 +41,10 @@ ignore_loop(_Config) ->
     {ok, _} = emqx_client:publish(Client, TestTopic, <<"testmsg">>, 2),
     ?assertEqual(0, length(emqx_client_SUITE:receive_messages(3))),
     ok = emqx_client:disconnect(Client),
-    application:set_env(emqx, mqtt_ignore_loop_deliver, false).
+    emqx_zone:set_env(external, ignore_loop_deliver, false).
 
 t_session_all(_) ->
-    emqx_zone:set_env(internal, idle_timeout, 100),
+    emqx_zone:set_env(internal, idle_timeout, 1000),
     ClientId = <<"ClientId">>,
     {ok, ConnPid} = emqx_mock_client:start_link(ClientId),
     {ok, SPid} = emqx_mock_client:open_session(ConnPid, ClientId, internal),
@@ -56,7 +55,7 @@ t_session_all(_) ->
     [{<<"topic">>, _}] = emqx:subscriptions(SPid),
     emqx_session:publish(SPid, 1, Message1),
     timer:sleep(200),
-    {publish, 1, _} = emqx_mock_client:get_last_message(ConnPid),
+    [{publish, 1, _}] = emqx_mock_client:get_last_message(ConnPid),
     Attrs = emqx_session:attrs(SPid),
     Info = emqx_session:info(SPid),
     Stats = emqx_session:stats(SPid),

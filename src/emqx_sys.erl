@@ -19,11 +19,28 @@
 -include("emqx.hrl").
 -include("logger.hrl").
 
+-logger_header("[SYS]").
+
 -export([start_link/0]).
--export([version/0, uptime/0, datetime/0, sysdescr/0, sys_interval/0]).
+
+-export([ version/0
+        , uptime/0
+        , datetime/0
+        , sysdescr/0
+        , sys_interval/0
+        , sys_heatbeat_interval/0
+        ]).
+
 -export([info/0]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-         code_change/3]).
+
+%% gen_server callbacks
+-export([ init/1
+        , handle_call/3
+        , handle_cast/2
+        , handle_info/2
+        , terminate/2
+        , code_change/3
+        ]).
 
 -import(emqx_topic, [systop/1]).
 -import(emqx_misc, [start_timer/2]).
@@ -39,6 +56,10 @@
     datetime, % Broker local datetime
     sysdescr  % Broker description
 ]).
+
+%%------------------------------------------------------------------------------
+%% APIs
+%%------------------------------------------------------------------------------
 
 -spec(start_link() -> {ok, pid()} | ignore | {error, any()}).
 start_link() ->
@@ -70,7 +91,12 @@ datetime() ->
 %% @doc Get sys interval
 -spec(sys_interval() -> pos_integer()).
 sys_interval() ->
-    application:get_env(?APP, sys_interval, 60000).
+    application:get_env(?APP, broker_sys_interval, 60000).
+
+%% @doc Get sys heatbeat interval
+-spec(sys_heatbeat_interval() -> pos_integer()).
+sys_heatbeat_interval() ->
+    application:get_env(?APP, broker_sys_heartbeat, 30000).
 
 %% @doc Get sys info
 -spec(info() -> list(tuple())).
@@ -91,7 +117,7 @@ init([]) ->
     {ok, heartbeat(tick(State))}.
 
 heartbeat(State) ->
-    State#state{heartbeat = start_timer(timer:seconds(1), heartbeat)}.
+    State#state{heartbeat = start_timer(sys_heatbeat_interval(), heartbeat)}.
 tick(State) ->
     State#state{ticker = start_timer(sys_interval(), tick)}.
 
@@ -99,11 +125,11 @@ handle_call(uptime, _From, State) ->
     {reply, uptime(State), State};
 
 handle_call(Req, _From, State) ->
-    ?ERROR("[SYS] unexpected call: ~p", [Req]),
+    ?LOG(error, "Unexpected call: ~p", [Req]),
     {reply, ignored, State}.
 
 handle_cast(Msg, State) ->
-    ?ERROR("[SYS] unexpected cast: ~p", [Msg]),
+    ?LOG(error, "Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
 handle_info({timeout, TRef, heartbeat}, State = #state{heartbeat = TRef}) ->
@@ -120,7 +146,7 @@ handle_info({timeout, TRef, tick}, State = #state{ticker = TRef, version = Versi
     {noreply, tick(State), hibernate};
 
 handle_info(Info, State) ->
-    ?ERROR("[SYS] unexpected info: ~p", [Info]),
+    ?LOG(error, "Unexpected info: ~p", [Info]),
     {noreply, State}.
 
 terminate(_Reason, #state{heartbeat = TRef1, ticker = TRef2}) ->
@@ -154,7 +180,7 @@ uptime(days, D) ->
 publish(uptime, Uptime) ->
     safe_publish(systop(uptime), Uptime);
 publish(datetime, Datetime) ->
-    safe_publish(systop(datatype), Datetime);
+    safe_publish(systop(datetime), Datetime);
 publish(version, Version) ->
     safe_publish(systop(version), #{retain => true}, Version);
 publish(sysdescr, Descr) ->
@@ -166,8 +192,11 @@ publish(stats, Stats) ->
     [safe_publish(systop(lists:concat(['stats/', Stat])), integer_to_binary(Val))
      || {Stat, Val} <- Stats, is_atom(Stat), is_integer(Val)];
 publish(metrics, Metrics) ->
-    [safe_publish(systop(lists:concat(['metrics/', Metric])), integer_to_binary(Val))
-     || {Metric, Val} <- Metrics, is_atom(Metric), is_integer(Val)].
+    [safe_publish(systop(metric_topic(Name)), integer_to_binary(Val))
+     || {Name, Val} <- Metrics, is_atom(Name), is_integer(Val)].
+
+metric_topic(Name) ->
+    lists:concat(["metrics/", string:replace(atom_to_list(Name), ".", "/", all)]).
 
 safe_publish(Topic, Payload) ->
     safe_publish(Topic, #{}, Payload).

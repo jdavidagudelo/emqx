@@ -18,14 +18,26 @@
 
 -include("emqx.hrl").
 -include("logger.hrl").
+-include("types.hrl").
+
+-logger_header("[Registry]").
 
 -export([start_link/0]).
--export([is_enabled/0]).
--export([register_session/1, lookup_session/1, unregister_session/1]).
+
+-export([ is_enabled/0
+        , register_session/1
+        , lookup_session/1
+        , unregister_session/1
+        ]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-         code_change/3]).
+-export([ init/1
+        , handle_call/3
+        , handle_cast/2
+        , handle_info/2
+        , terminate/2
+        , code_change/3
+        ]).
 
 -define(REGISTRY, ?MODULE).
 -define(TAB, emqx_session_registry).
@@ -35,8 +47,12 @@
 
 -type(session_pid() :: pid()).
 
+%%------------------------------------------------------------------------------
+%% APIs
+%%------------------------------------------------------------------------------
+
 %% @doc Start the global session manager.
--spec(start_link() -> emqx_types:startlink_ret()).
+-spec(start_link() -> startlink_ret()).
 start_link() ->
     gen_server:start_link({local, ?REGISTRY}, ?MODULE, [], []).
 
@@ -82,11 +98,11 @@ init([]) ->
     {ok, #{}}.
 
 handle_call(Req, _From, State) ->
-    ?ERROR("[Registry] unexpected call: ~p", [Req]),
+    ?LOG(error, "Unexpected call: ~p", [Req]),
     {reply, ignored, State}.
 
 handle_cast(Msg, State) ->
-    ?ERROR("[Registry] unexpected cast: ~p", [Msg]),
+    ?LOG(error, "Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
 handle_info({membership, {mnesia, down, Node}}, State) ->
@@ -100,7 +116,7 @@ handle_info({membership, _Event}, State) ->
     {noreply, State};
 
 handle_info(Info, State) ->
-    ?ERROR("[Registry] unexpected info: ~p", [Info]),
+    ?LOG(error, "Unexpected info: ~p", [Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
