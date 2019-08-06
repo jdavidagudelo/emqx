@@ -308,13 +308,10 @@ publish(Client, Topic, Payload) when is_binary(Topic) ->
 -spec(publish(client(), topic(), payload(), qos() | [pubopt()])
         -> ok | {ok, packet_id()} | {error, term()}).
 publish(Client, Topic, Payload, QoS) when is_binary(Topic), is_atom(QoS) ->
-    io:format("The topic ~s is running now!", [Topic]),
     publish(Client, Topic, Payload, [{qos, ?QOS_I(QoS)}]);
 publish(Client, Topic, Payload, QoS) when is_binary(Topic), ?IS_QOS(QoS) ->
-    io:format("The topic ~s is running now!", [Topic]),
     publish(Client, Topic, Payload, [{qos, QoS}]);
 publish(Client, Topic, Payload, Opts) when is_binary(Topic), is_list(Opts) ->
-    io:format("The topic ~s is running now!", [Topic]),
     publish(Client, Topic, #{}, Payload, Opts).
 
 -spec(publish(client(), topic(), properties(), payload(), [pubopt()])
