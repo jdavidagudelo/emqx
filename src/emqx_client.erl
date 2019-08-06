@@ -303,26 +303,24 @@ parse_subopt([{qos, QoS} | Opts], Result) ->
 
 -spec(publish(client(), topic(), payload()) -> ok | {error, term()}).
 publish(Client, Topic, Payload) when is_binary(Topic) ->
-    ?LOG(notice, "Publishing Performed: ~s", [Topic]),
     publish(Client, #mqtt_msg{topic = Topic, qos = ?QOS_0, payload = iolist_to_binary(Payload)}).
 
 -spec(publish(client(), topic(), payload(), qos() | [pubopt()])
         -> ok | {ok, packet_id()} | {error, term()}).
 publish(Client, Topic, Payload, QoS) when is_binary(Topic), is_atom(QoS) ->
-    ?LOG(notice, "Publishing Performed: ~s", [Topic]),
+    io:format("The topic ~s is running now!", [Topic]),
     publish(Client, Topic, Payload, [{qos, ?QOS_I(QoS)}]);
 publish(Client, Topic, Payload, QoS) when is_binary(Topic), ?IS_QOS(QoS) ->
-    ?LOG(notice, "Publishing Performed: ~s", [Topic]),
+    io:format("The topic ~s is running now!", [Topic]),
     publish(Client, Topic, Payload, [{qos, QoS}]);
 publish(Client, Topic, Payload, Opts) when is_binary(Topic), is_list(Opts) ->
-    ?LOG(notice, "Publishing Performed: ~s", [Topic]),
+    io:format("The topic ~s is running now!", [Topic]),
     publish(Client, Topic, #{}, Payload, Opts).
 
 -spec(publish(client(), topic(), properties(), payload(), [pubopt()])
       -> ok | {ok, packet_id()} | {error, term()}).
 publish(Client, Topic, Properties, Payload, Opts)
     when is_binary(Topic), is_map(Properties), is_list(Opts) ->
-    ?LOG(notice, "Publishing Performed: ~s", [Topic]),
     ok = emqx_mqtt_props:validate(Properties),
     Retain = proplists:get_bool(retain, Opts),
     QoS = ?QOS_I(proplists:get_value(qos, Opts, ?QOS_0)),
