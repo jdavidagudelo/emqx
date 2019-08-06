@@ -200,8 +200,12 @@ publish(Msg = #message{topic=Topic})when is_record(Msg, message) ->
         #message{headers = #{allow_publish := false}} ->
             ?LOG(notice, "Publishing interrupted: ~s", [emqx_message:format(Msg)]),
             [];
-        #message{topic = Topic} = Msg1 ->
-            Delivery = route(aggre(emqx_router:match_routes(Topic)), delivery(Msg1)),
+        #message{topic = Topic, payload=Payload,
+            id=Id, qos=QoS, from=From, flags=Flags, headers=Headers} = Msg1 ->
+            NewMsg = emqx_message:make(From, QoS, Topic, Payload),
+            NewMsg = emqx_message:set_flags(Flags, NewMsg),
+            NewMsg = emqx_message:set_headers(Headers, NewMsg),
+            Delivery = route(aggre(emqx_router:match_routes(Topic)), delivery(NewMsg)),
             Delivery#delivery.results
     end.
 
