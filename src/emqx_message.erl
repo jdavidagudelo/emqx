@@ -31,7 +31,6 @@
         , topic/1
         , payload/1
         , timestamp/1
-        , set_topic/2
         ]).
 
 %% Flags
@@ -104,10 +103,6 @@ payload(#message{payload = Payload}) -> Payload.
 
 -spec(timestamp(emqx_types:message()) -> erlang:timestamp()).
 timestamp(#message{timestamp = TS}) -> TS.
-
--spec(set_topic(emqx:topic(), emqx_types:message()) -> emqx_types:message()).
-set_topic(Topic, Msg) ->
-    Msg#message{topic = Topic}.
 
 -spec(set_flags(map(), emqx_types:message()) -> emqx_types:message()).
 set_flags(Flags, Msg = #message{flags = undefined}) when is_map(Flags) ->
