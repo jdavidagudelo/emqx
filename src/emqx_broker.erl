@@ -192,7 +192,7 @@ do_unsubscribe(Group, Topic, SubPid, _SubOpts) ->
 %%------------------------------------------------------------------------------
 
 -spec(publish(emqx_types:message()) -> emqx_types:deliver_results()).
-publish(Msg)when is_record(Msg, message) ->
+publish(Msg) when is_record(Msg, message) ->
     _ = emqx_tracer:trace(publish, Msg),
     Headers = Msg#message.headers,
     case emqx_hooks:run_fold('message.publish', [], Msg#message{headers = Headers#{allow_publish => true}}) of
