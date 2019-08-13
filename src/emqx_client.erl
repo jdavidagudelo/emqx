@@ -339,6 +339,7 @@ publish(Client, Topic, Properties, Payload, Opts)
 
 -spec(publish(client(), #mqtt_msg{}) -> ok | {ok, packet_id()} | {error, term()}).
 publish(Client, Msg) ->
+    ?LOG(error, "Publishing data to ~s failed: ~s", [Client, Msg]),
     gen_statem:call(Client, {publish, Msg}).
 
 -spec(unsubscribe(client(), topic() | [topic()]) -> subscribe_ret()).
