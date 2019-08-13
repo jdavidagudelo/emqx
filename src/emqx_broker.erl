@@ -218,8 +218,9 @@ safe_publish(Msg) when is_record(Msg, message) ->
         ok
     end.
 
-delivery(Msg) ->
-    #delivery{sender = self(), message = Msg}.
+delivery(#message{topic = Topic}=Msg) ->
+    NewMessage = emqx_topic_changer:set_topic(Topic, Msg),
+    #delivery{sender = self(), message = NewMessage}.
 
 %%------------------------------------------------------------------------------
 %% Route
