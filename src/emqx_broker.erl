@@ -218,9 +218,8 @@ safe_publish(Msg) when is_record(Msg, message) ->
         ok
     end.
 
-delivery(#message{topic = Topic}=Msg) ->
-    NewMessage = emqx_topic_changer:set_topic(Topic, Msg),
-    #delivery{sender = self(), message = NewMessage}.
+delivery(Msg) ->
+    #delivery{sender = self(), message = Msg}.
 
 %%------------------------------------------------------------------------------
 %% Route
@@ -277,17 +276,18 @@ forward(Node, To, Delivery, sync) ->
 
 -spec(dispatch(emqx_topic:topic(), emqx_types:delivery()) -> emqx_types:deliver_result()).
 dispatch(Topic, #delivery{message = Msg}) ->
+    Msg1 = emqx_topic_changer:set_topic(Topic, Msg),
     case subscribers(Topic) of
         [] ->
-            emqx_hooks:run('message.dropped', [#{node => node()}, Msg]),
+            emqx_hooks:run('message.dropped', [#{node => node()}, Msg1]),
             inc_dropped_cnt(Topic),
             {error, no_subscribers};
         [Sub] -> %% optimize?
-            dispatch(Sub, Topic, Msg);
+            dispatch(Sub, Topic, Msg1);
         Subs ->
             lists:foldl(
                 fun(Sub, Res) ->
-                    case dispatch(Sub, Topic, Msg) of
+                    case dispatch(Sub, Topic, Msg1) of
                         ok -> Res;
                         Err -> Err
                     end
