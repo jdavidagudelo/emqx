@@ -1135,9 +1135,11 @@ retry_send(pubrel, PacketId, Now, State = #state{inflight = Inflight}) ->
 deliver(#mqtt_msg{qos = QoS, dup = Dup, retain = Retain, packet_id = PacketId,
                   topic = Topic, props = Props, payload = Payload},
         State) ->
+
     Msg = #{qos => QoS, dup => Dup, retain => Retain, packet_id => PacketId,
             topic => Topic, properties => Props, payload => Payload,
             client_pid => self()},
+    ?LOG(notice, "Publishing interrupted: ~s", [emqx_message:format(Msg)]),
     ok = eval_msg_handler(State, publish, Msg),
     State.
 
