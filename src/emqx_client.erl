@@ -313,21 +313,26 @@ parse_subopt([{qos, QoS} | Opts], Result) ->
 
 -spec(publish(client(), topic(), payload()) -> ok | {error, term()}).
 publish(Client, Topic, Payload) when is_binary(Topic) ->
+    ?LOG(error, "Publishing data to ~s failed: ~s", [Client, Topic]),
     publish(Client, #mqtt_msg{topic = Topic, qos = ?QOS_0, payload = iolist_to_binary(Payload)}).
 
 -spec(publish(client(), topic(), payload(), qos() | [pubopt()])
         -> ok | {ok, packet_id()} | {error, term()}).
 publish(Client, Topic, Payload, QoS) when is_binary(Topic), is_atom(QoS) ->
+    ?LOG(error, "Publishing data to ~s failed: ~s", [Client, Topic]),
     publish(Client, Topic, Payload, [{qos, ?QOS_I(QoS)}]);
 publish(Client, Topic, Payload, QoS) when is_binary(Topic), ?IS_QOS(QoS) ->
+    ?LOG(error, "Publishing data to ~s failed: ~s", [Client, Topic]),
     publish(Client, Topic, Payload, [{qos, QoS}]);
 publish(Client, Topic, Payload, Opts) when is_binary(Topic), is_list(Opts) ->
+    ?LOG(error, "Publishing data to ~s failed: ~s", [Client, Topic]),
     publish(Client, Topic, #{}, Payload, Opts).
 
 -spec(publish(client(), topic(), properties(), payload(), [pubopt()])
       -> ok | {ok, packet_id()} | {error, term()}).
 publish(Client, Topic, Properties, Payload, Opts)
     when is_binary(Topic), is_map(Properties), is_list(Opts) ->
+    ?LOG(error, "Publishing data to ~s failed: ~s", [Client, Topic]),
     ok = emqx_mqtt_props:validate(Properties),
     Retain = proplists:get_bool(retain, Opts),
     QoS = ?QOS_I(proplists:get_value(qos, Opts, ?QOS_0)),
@@ -1135,11 +1140,9 @@ retry_send(pubrel, PacketId, Now, State = #state{inflight = Inflight}) ->
 deliver(#mqtt_msg{qos = QoS, dup = Dup, retain = Retain, packet_id = PacketId,
                   topic = Topic, props = Props, payload = Payload},
         State) ->
-
     Msg = #{qos => QoS, dup => Dup, retain => Retain, packet_id => PacketId,
             topic => Topic, properties => Props, payload => Payload,
             client_pid => self()},
-    ?LOG(notice, "Publishing interrupted: ~s", [emqx_message:format(Msg)]),
     ok = eval_msg_handler(State, publish, Msg),
     State.
 
