@@ -445,7 +445,6 @@ handle_call(Req, _From, State) ->
     {reply, ignored, State}.
 
 handle_cast({subscribe, Topic}, State) ->
-    ?LOG(error, "Unexpected call: ~p", [Topic]),
     case emqx_router:do_add_route(Topic) of
         ok -> ok;
         {error, Reason} ->
