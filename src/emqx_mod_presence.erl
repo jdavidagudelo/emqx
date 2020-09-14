@@ -40,7 +40,7 @@ decode_clientid(ClientId) ->
     IsValidClientId = unicode:bin_is_7bit(ClientId),
     if IsValidClientId ->
         ClientId;
-        true -> base64:encode(binary:bin_to_list(ClientId))
+        true -> base64:encode(ClientId)
     end.
 
 
