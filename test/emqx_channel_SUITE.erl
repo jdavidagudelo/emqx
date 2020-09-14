@@ -58,7 +58,8 @@ end_per_suite(_Config) ->
                  emqx_session,
                  emqx_broker,
                  emqx_hooks,
-                 emqx_cm
+                 emqx_cm,
+                 emqx_zone
                 ]).
 
 init_per_testcase(_TestCase, Config) ->
@@ -152,6 +153,8 @@ t_handle_in_re_auth(_) ->
                 },
     {ok, [{outgoing, ?DISCONNECT_PACKET(?RC_BAD_AUTHENTICATION_METHOD)}, {close, bad_authentication_method}], _} =
         emqx_channel:handle_in(?AUTH_PACKET(?RC_RE_AUTHENTICATE,Properties), channel()),
+    {ok, [{outgoing, ?DISCONNECT_PACKET(?RC_BAD_AUTHENTICATION_METHOD)}, {close, bad_authentication_method}], _} =
+        emqx_channel:handle_in(?AUTH_PACKET(?RC_RE_AUTHENTICATE,Properties), channel(#{conninfo => #{proto_ver => ?MQTT_PROTO_V5, conn_props => undefined}})),
     {ok, [{outgoing, ?DISCONNECT_PACKET(?RC_NOT_AUTHORIZED)}, {close, not_authorized}], _} =
         emqx_channel:handle_in(?AUTH_PACKET(?RC_RE_AUTHENTICATE,Properties), channel(#{conninfo => #{proto_ver => ?MQTT_PROTO_V5, conn_props => Properties}})).
 
@@ -168,7 +171,7 @@ t_handle_in_qos1_publish(_) ->
         emqx_channel:handle_in(Publish, channel(#{conn_state => connected})).
 
 t_handle_in_qos2_publish(_) ->
-    ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, 1}] end),
+    ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 1}}] end),
     Channel = channel(#{conn_state => connected, session => session()}),
     Publish1 = ?PUBLISH_PACKET(?QOS_2, <<"topic">>, 1, <<"payload">>),
     {ok, ?PUBREC_PACKET(1, ?RC_SUCCESS), Channel1} =
@@ -279,7 +282,7 @@ t_handle_in_subscribe(_) ->
 
 t_handle_in_unsubscribe(_) ->
     ok = meck:expect(emqx_session, unsubscribe,
-                     fun(_, _, Session) ->
+                     fun(_, _, _, Session) ->
                              {ok, Session}
                      end),
     Channel = channel(#{conn_state => connected}),
@@ -345,12 +348,63 @@ t_process_publish_qos1(_) ->
 t_process_subscribe(_) ->
     ok = meck:expect(emqx_session, subscribe, fun(_, _, _, Session) -> {ok, Session} end),
     TopicFilters = [{<<"+">>, ?DEFAULT_SUBOPTS}],
-    {[?RC_SUCCESS], _Channel} = emqx_channel:process_subscribe(TopicFilters, channel()).
+    {[?RC_SUCCESS], _Channel} = emqx_channel:process_subscribe(TopicFilters, #{}, channel()).
 
 t_process_unsubscribe(_) ->
-    ok = meck:expect(emqx_session, unsubscribe, fun(_, _, Session) -> {ok, Session} end),
+    ok = meck:expect(emqx_session, unsubscribe, fun(_, _, _, Session) -> {ok, Session} end),
     TopicFilters = [{<<"+">>, ?DEFAULT_SUBOPTS}],
-    {[?RC_SUCCESS], _Channel} = emqx_channel:process_unsubscribe(TopicFilters, channel()).
+    {[?RC_SUCCESS], _Channel} = emqx_channel:process_unsubscribe(TopicFilters, #{}, channel()).
+
+t_quota_qos0(_) ->
+    esockd_limiter:start_link(), Cnter = counters:new(1, []),
+    ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
+    ok = meck:expect(emqx_metrics, inc, fun('packets.publish.dropped') -> counters:add(Cnter, 1, 1) end),
+    ok = meck:expect(emqx_metrics, val, fun('packets.publish.dropped') -> counters:get(Cnter, 1) end),
+    Chann = channel(#{conn_state => connected, quota => quota()}),
+    Pub = ?PUBLISH_PACKET(?QOS_0, <<"topic">>, undefined, <<"payload">>),
+
+    M1 = emqx_metrics:val('packets.publish.dropped'),
+    {ok, Chann1} = emqx_channel:handle_in(Pub, Chann),
+    {ok, Chann2} = emqx_channel:handle_in(Pub, Chann1),
+    M1 = emqx_metrics:val('packets.publish.dropped') - 1,
+    {ok, Chann3} = emqx_channel:handle_timeout(ref, expire_quota_limit, Chann2),
+    {ok, _} = emqx_channel:handle_in(Pub, Chann3),
+    M1 = emqx_metrics:val('packets.publish.dropped') - 1,
+
+    ok = meck:expect(emqx_metrics, inc, fun(_) -> ok end),
+    ok = meck:expect(emqx_metrics, inc, fun(_, _) -> ok end),
+    esockd_limiter:stop().
+
+t_quota_qos1(_) ->
+    esockd_limiter:start_link(),
+    ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
+    Chann = channel(#{conn_state => connected, quota => quota()}),
+    Pub = ?PUBLISH_PACKET(?QOS_1, <<"topic">>, 1, <<"payload">>),
+    %% Quota per connections
+    {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann1} = emqx_channel:handle_in(Pub, Chann),
+    {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), Chann2} = emqx_channel:handle_in(Pub, Chann1),
+    {ok, Chann3} = emqx_channel:handle_timeout(ref, expire_quota_limit, Chann2),
+    {ok, ?PUBACK_PACKET(1, ?RC_SUCCESS), Chann4} = emqx_channel:handle_in(Pub, Chann3),
+    %% Quota in overall
+    {ok, ?PUBACK_PACKET(1, ?RC_QUOTA_EXCEEDED), _} = emqx_channel:handle_in(Pub, Chann4),
+    esockd_limiter:stop().
+
+t_quota_qos2(_) ->
+    esockd_limiter:start_link(),
+    ok = meck:expect(emqx_broker, publish, fun(_) -> [{node(), <<"topic">>, {ok, 4}}] end),
+    Chann = channel(#{conn_state => connected, quota => quota()}),
+    Pub1 = ?PUBLISH_PACKET(?QOS_2, <<"topic">>, 1, <<"payload">>),
+    Pub2 = ?PUBLISH_PACKET(?QOS_2, <<"topic">>, 2, <<"payload">>),
+    Pub3 = ?PUBLISH_PACKET(?QOS_2, <<"topic">>, 3, <<"payload">>),
+    Pub4 = ?PUBLISH_PACKET(?QOS_2, <<"topic">>, 4, <<"payload">>),
+    %% Quota per connections
+    {ok, ?PUBREC_PACKET(1, ?RC_SUCCESS), Chann1} = emqx_channel:handle_in(Pub1, Chann),
+    {ok, ?PUBREC_PACKET(2, ?RC_QUOTA_EXCEEDED), Chann2} = emqx_channel:handle_in(Pub2, Chann1),
+    {ok, Chann3} = emqx_channel:handle_timeout(ref, expire_quota_limit, Chann2),
+    {ok, ?PUBREC_PACKET(3, ?RC_SUCCESS), Chann4} = emqx_channel:handle_in(Pub3, Chann3),
+    %% Quota in overall
+    {ok, ?PUBREC_PACKET(4, ?RC_QUOTA_EXCEEDED), _} = emqx_channel:handle_in(Pub4, Chann4),
+    esockd_limiter:stop().
 
 %%--------------------------------------------------------------------
 %% Test cases for handle_deliver
@@ -391,6 +445,27 @@ t_handle_out_connack_sucess(_) ->
     {ok, [{event, connected}, {connack, ?CONNACK_PACKET(?RC_SUCCESS, 0, _)}], Channel} =
         emqx_channel:handle_out(connack, {?RC_SUCCESS, 0, #{}}, channel()),
     ?assertEqual(connected, emqx_channel:info(conn_state, Channel)).
+
+t_handle_out_connack_response_information(_) ->
+    ok = meck:expect(emqx_cm, open_session,
+                     fun(true, _ClientInfo, _ConnInfo) ->
+                             {ok, #{session => session(), present => false}}
+                     end),
+    ok = meck:expect(emqx_zone, response_information, fun(_) -> test end),
+    IdleChannel = channel(#{conn_state => idle}),
+    {ok, [{event, connected}, {connack, ?CONNACK_PACKET(?RC_SUCCESS, 0, #{'Response-Information' := test})}], _} =
+        emqx_channel:handle_in(?CONNECT_PACKET(connpkt(#{'Request-Response-Information' => 1})), IdleChannel).
+
+t_handle_out_connack_not_response_information(_) ->
+    ok = meck:expect(emqx_cm, open_session,
+                     fun(true, _ClientInfo, _ConnInfo) ->
+                             {ok, #{session => session(), present => false}}
+                     end),
+    ok = meck:expect(emqx_zone, response_information, fun(_) -> test end),
+    IdleChannel = channel(#{conn_state => idle}),
+    {ok, [{event, connected}, {connack, ?CONNACK_PACKET(?RC_SUCCESS, 0, AckProps)}], _} =
+        emqx_channel:handle_in(?CONNECT_PACKET(connpkt(#{'Request-Response-Information' => 0})), IdleChannel),
+    ?assertEqual(false, maps:is_key('Response-Information', AckProps)).
 
 t_handle_out_connack_failure(_) ->
     {shutdown, not_authorized, ?CONNACK_PACKET(?RC_NOT_AUTHORIZED), _Chan} =
@@ -453,6 +528,9 @@ t_handle_call_takeover_end(_) ->
     {shutdown, takeovered, [], _, _Chan} =
         emqx_channel:handle_call({takeover, 'end'}, channel()).
 
+t_handle_call_quota(_) ->
+    {reply, ok, _Chan} = emqx_channel:handle_call({quota, [{conn_messages_routing, {100,1}}]}, channel()).
+
 t_handle_call_unexpected(_) ->
     {reply, ignored, _Chan} = emqx_channel:handle_call(unexpected_req, channel()).
 
@@ -465,7 +543,7 @@ t_handle_info_subscribe(_) ->
     {ok, _Chan} = emqx_channel:handle_info({subscribe, topic_filters()}, channel()).
 
 t_handle_info_unsubscribe(_) ->
-    ok = meck:expect(emqx_session, unsubscribe, fun(_, _, Session) -> {ok, Session} end),
+    ok = meck:expect(emqx_session, unsubscribe, fun(_, _, _, Session) -> {ok, Session} end),
     {ok, _Chan} = emqx_channel:handle_info({unsubscribe, topic_filters()}, channel()).
 
 t_handle_info_sock_closed(_) ->
@@ -530,18 +608,32 @@ t_process_alias(_) ->
         emqx_channel:process_alias(#mqtt_packet{variable = Publish}, Channel).
 
 t_packing_alias(_) ->
-    Packet1 = #mqtt_packet{variable = #mqtt_packet_publish{topic_name = <<"x">>}},
+    Packet1 = #mqtt_packet{variable = #mqtt_packet_publish{
+                                         topic_name = <<"x">>,
+                                         properties = #{'User-Property' => [{<<"k">>, <<"v">>}]}
+                                        }},
     Packet2 = #mqtt_packet{variable = #mqtt_packet_publish{topic_name = <<"y">>}},
     Channel = emqx_channel:set_field(alias_maximum, #{outbound => 1}, channel()),
 
     {RePacket1, NChannel1} = emqx_channel:packing_alias(Packet1, Channel),
-    ?assertEqual(#mqtt_packet{variable = #mqtt_packet_publish{topic_name = <<"x">>, properties = #{'Topic-Alias' => 1}}}, RePacket1),
+    ?assertEqual(#mqtt_packet{variable = #mqtt_packet_publish{
+                                            topic_name = <<"x">>,
+                                            properties = #{
+                                                'Topic-Alias' => 1,
+                                                'User-Property' => [{<<"k">>, <<"v">>}]
+                                             }
+                                           }}, RePacket1),
 
     {RePacket2, NChannel2} = emqx_channel:packing_alias(Packet1, NChannel1),
-    ?assertEqual(#mqtt_packet{variable = #mqtt_packet_publish{topic_name = <<>>, properties = #{'Topic-Alias' => 1}}}, RePacket2),
+    ?assertEqual(#mqtt_packet{variable = #mqtt_packet_publish{
+                                            topic_name = <<>>,
+                                            properties = #{
+                                                'Topic-Alias' => 1,
+                                                'User-Property' => [{<<"k">>, <<"v">>}]
+                                             }}}, RePacket2),
 
     {RePacket3, _} = emqx_channel:packing_alias(Packet2, NChannel2),
-    ?assertEqual(#mqtt_packet{variable = #mqtt_packet_publish{topic_name = <<"y">>, properties = undefined}}, RePacket3),
+    ?assertEqual(#mqtt_packet{variable = #mqtt_packet_publish{topic_name = <<"y">>, properties = #{}}}, RePacket3),
 
     ?assertMatch({#mqtt_packet{variable = #mqtt_packet_publish{topic_name = <<"z">>}}, _},  emqx_channel:packing_alias(#mqtt_packet{variable = #mqtt_packet_publish{topic_name = <<"z">>}}, channel())).
 
@@ -637,14 +729,15 @@ clientinfo(InitProps) ->
 topic_filters() ->
     [{<<"+">>, ?DEFAULT_SUBOPTS}, {<<"#">>, ?DEFAULT_SUBOPTS}].
 
-connpkt() ->
+connpkt() -> connpkt(#{}).
+connpkt(Props) ->
     #mqtt_packet_connect{
        proto_name  = <<"MQTT">>,
        proto_ver   = ?MQTT_PROTO_V4,
        is_bridge   = false,
        clean_start = true,
        keepalive   = 30,
-       properties  = undefined,
+       properties  = Props,
        clientid    = <<"clientid">>,
        username    = <<"username">>,
        password    = <<"passwd">>
@@ -657,4 +750,9 @@ session(InitFields) when is_map(InitFields) ->
               end,
               emqx_session:init(#{zone => channel}, #{receive_maximum => 0}),
               InitFields).
+
+%% conn: 5/s; overall: 10/s
+quota() ->
+    emqx_limiter:init(zone, [{conn_messages_routing, {5, 1}},
+                             {overall_messages_routing, {10, 1}}]).
 

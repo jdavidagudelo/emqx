@@ -22,6 +22,12 @@
 -include_lib("emqx/include/emqx.hrl").
 -include_lib("emqx/include/logger.hrl").
 
+%% Mnesia bootstrap
+-export([mnesia/1]).
+
+-boot_mnesia({mnesia, [boot]}).
+-copy_mnesia({mnesia, [copy]}).
+
 %% emqx_gen_mod callbacks
 -export([ load/1
         , unload/1
@@ -51,6 +57,20 @@
 -define(MAX_INTERVAL, 4294967).
 
 %%--------------------------------------------------------------------
+%% Mnesia bootstrap
+%%--------------------------------------------------------------------
+
+mnesia(boot) ->
+    ok = ekka_mnesia:create_table(?TAB, [
+                {type, ordered_set},
+                {disc_copies, [node()]},
+                {local_content, true},
+                {record_name, delayed_message},
+                {attributes, record_info(fields, delayed_message)}]);
+mnesia(copy) ->
+    ok = ekka_mnesia:copy_table(?TAB, disc_copies).
+
+%%--------------------------------------------------------------------
 %% Load/Unload
 %%--------------------------------------------------------------------
 
@@ -61,7 +81,7 @@ load(_Env) ->
 
 -spec(unload(list()) -> ok).
 unload(_Env) ->
-    emqx:unhook('message.publish', {?MODULE, on_message_publish, []}),
+    emqx:unhook('message.publish', {?MODULE, on_message_publish}),
     emqx_mod_sup:stop_child(?MODULE).
 
 description() ->
@@ -83,20 +103,12 @@ on_message_publish(Msg = #message{id = Id, topic = <<"$delayed/", Topic/binary>>
                     end
             end,
     PubMsg = Msg#message{topic = Topic1},
-    Headers = case PubMsg#message.headers of
-        undefined -> #{};
-        Headers0 -> Headers0
-    end,
-    ok = store(#delayed_message{key = {PubAt, delayed_mid(Id)}, msg = PubMsg}),
+    Headers = PubMsg#message.headers,
+    ok = store(#delayed_message{key = {PubAt, Id}, msg = PubMsg}),
     {stop, PubMsg#message{headers = Headers#{allow_publish => false}}};
 
 on_message_publish(Msg) ->
     {ok, Msg}.
-
-%% @private
-delayed_mid(undefined) ->
-    emqx_guid:gen();
-delayed_mid(MsgId) -> MsgId.
 
 %%--------------------------------------------------------------------
 %% Start delayed publish server
@@ -115,13 +127,6 @@ store(DelayedMsg) ->
 %%--------------------------------------------------------------------
 
 init([]) ->
-    ok = ekka_mnesia:create_table(?TAB, [
-                {type, ordered_set},
-                {disc_copies, [node()]},
-                {local_content, true},
-                {record_name, delayed_message},
-                {attributes, record_info(fields, delayed_message)}]),
-    ok = ekka_mnesia:copy_table(?TAB, disc_copies),
     {ok, ensure_publish_timer(#{timer => undefined, publish_at => 0})}.
 
 handle_call({store, DelayedMsg = #delayed_message{key = Key}}, _From, State) ->
@@ -190,7 +195,7 @@ do_publish(Key = {Ts, _Id}, Now, Acc) when Ts =< Now ->
     case mnesia:dirty_read(?TAB, Key) of
         [] -> ok;
         [#delayed_message{msg = Msg}] ->
-            emqx_pool:async_submit(fun emqx_broker:publish/1, [Msg])
+            emqx_pool:async_submit(fun emqx:publish/1, [Msg])
     end,
     do_publish(mnesia:dirty_next(?TAB, Key), Now, [Key|Acc]).
 

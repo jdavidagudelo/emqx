@@ -104,7 +104,7 @@ t_info(_) ->
                     socktype := tcp}, SockInfo).
 
 t_info_limiter(_) ->
-    St = st(#{limiter => emqx_limiter:init([])}),
+    St = st(#{limiter => emqx_limiter:init(external, [])}),
     ?assertEqual(undefined, emqx_connection:info(limiter, St)).
 
 t_stats(_) ->
@@ -220,7 +220,9 @@ t_handle_call(_) ->
     St = st(),
     ?assertMatch({ok, _St}, emqx_connection:handle_msg({event, undefined}, St)),
     ?assertMatch({reply, _Info, _NSt}, emqx_connection:handle_call(self(), info, St)),
-    ?assertMatch({reply, _Stats, _NSt }, emqx_connection:handle_call(self(), stats, St)),
+    ?assertMatch({reply, _Stats, _NSt}, emqx_connection:handle_call(self(), stats, St)),
+    ?assertMatch({reply, ok, _NSt}, emqx_connection:handle_call(self(), {ratelimit, []}, St)),
+    ?assertMatch({reply, ok, _NSt}, emqx_connection:handle_call(self(), {ratelimit, [{conn_messages_in, {100, 1}}]}, St)),
     ?assertEqual({reply, ignored, St}, emqx_connection:handle_call(self(), for_testing, St)),
     ?assertMatch({stop, {shutdown,kicked}, ok, _NSt}, emqx_connection:handle_call(self(), kick, St)).
 
@@ -279,11 +281,11 @@ t_ensure_rate_limit(_) ->
     State = emqx_connection:ensure_rate_limit(#{}, st(#{limiter => undefined})),
     ?assertEqual(undefined, emqx_connection:info(limiter, State)),
 
-    ok = meck:expect(emqx_limiter, check, fun(_, _) -> {ok, emqx_limiter:init([])} end),
+    ok = meck:expect(emqx_limiter, check, fun(_, _) -> {ok, emqx_limiter:init(external, [])} end),
     State1 = emqx_connection:ensure_rate_limit(#{}, st(#{limiter => #{}})),
     ?assertEqual(undefined, emqx_connection:info(limiter, State1)),
 
-    ok = meck:expect(emqx_limiter, check, fun(_, _) -> {pause, 3000, emqx_limiter:init([])} end),
+    ok = meck:expect(emqx_limiter, check, fun(_, _) -> {pause, 3000, emqx_limiter:init(external, [])} end),
     State2 = emqx_connection:ensure_rate_limit(#{}, st(#{limiter => #{}})),
     ?assertEqual(undefined, emqx_connection:info(limiter, State2)),
     ?assertEqual(blocked, emqx_connection:info(sockstate, State2)).

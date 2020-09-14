@@ -175,6 +175,27 @@ t_connect_will_message(_) ->
     ?assertEqual(0, length(receive_messages(1))),  %% [MQTT-3.1.2-10]
     ok = emqtt:disconnect(Client4).
 
+t_batch_subscribe(_) ->
+    {ok, Client} = emqtt:start_link([{proto_ver, v5}, {clientid, <<"batch_test">>}]),
+    {ok, _} = emqtt:connect(Client),
+    application:set_env(emqx, enable_acl_cache, false),
+    TempAcl = emqx_ct_helpers:deps_path(emqx, "test/emqx_access_SUITE_data/acl_temp.conf"),
+    file:write_file(TempAcl, "{deny, {client, \"batch_test\"}, subscribe, [\"t1\", \"t2\", \"t3\"]}.\n"),
+    timer:sleep(10),
+    emqx_mod_acl_internal:reload([{acl_file, TempAcl}]),
+    {ok, _, [?RC_NOT_AUTHORIZED,
+             ?RC_NOT_AUTHORIZED,
+             ?RC_NOT_AUTHORIZED]} = emqtt:subscribe(Client, [{<<"t1">>, qos1},
+                                                             {<<"t2">>, qos2},
+                                                             {<<"t3">>, qos0}]),
+    {ok, _, [?RC_NO_SUBSCRIPTION_EXISTED,
+             ?RC_NO_SUBSCRIPTION_EXISTED,
+             ?RC_NO_SUBSCRIPTION_EXISTED]} = emqtt:unsubscribe(Client, [<<"t1">>,
+                                                                        <<"t2">>,
+                                                                        <<"t3">>]),
+    file:delete(TempAcl),
+    emqtt:disconnect(Client).
+
 t_connect_will_retain(_) ->
     Topic = nth(1, ?TOPICS),
     Payload = "will message",
@@ -233,7 +254,7 @@ t_connect_limit_timeout(_) ->
                                                             end),
 
     Topic = nth(1, ?TOPICS),
-    emqx_zone:set_env(external, publish_limit, {2.0, 3}),
+    emqx_zone:set_env(external, publish_limit, {3, 5}),
 
     {ok, Client} = emqtt:start_link([{proto_ver, v5},{keepalive, 60}]),
     {ok, _} = emqtt:connect(Client),
@@ -243,11 +264,11 @@ t_connect_limit_timeout(_) ->
     ok = emqtt:publish(Client, Topic, <<"t_shared_subscriptions_client_terminates_when_qos_eq_2">>, 0),
     ok = emqtt:publish(Client, Topic, <<"t_shared_subscriptions_client_terminates_when_qos_eq_2">>, 0),
     ok = emqtt:publish(Client, Topic, <<"t_shared_subscriptions_client_terminates_when_qos_eq_2">>, 0),
-    ok = emqtt:publish(Client, Topic, <<"t_shared_subscriptions_client_terminates_when_qos_eq_2">>, 0),
     timer:sleep(200),
     ?assert(is_reference(emqx_connection:info(limit_timer, sys:get_state(ClientPid)))),
 
     ok = emqtt:disconnect(Client),
+    emqx_zone:set_env(external, publish_limit, undefined),
     meck:unload(proplists).
 
 t_connect_emit_stats_timeout(_) ->
@@ -556,7 +577,7 @@ t_publish_topic_alias(_) ->
     waiting_client_process_exit(Client2),
 
     process_flag(trap_exit, false).
-    
+
 t_publish_response_topic(_) ->
     process_flag(trap_exit, true),
     Topic = nth(1, ?TOPICS),
@@ -609,7 +630,7 @@ t_subscribe_topic_alias(_) ->
     Topic1 = nth(1, ?TOPICS),
     Topic2 = nth(2, ?TOPICS),
     {ok, Client1} = emqtt:start_link([{proto_ver, v5},
-                                      {properties, #{'Topic-Alias-Maximum' => 1}}    
+                                      {properties, #{'Topic-Alias-Maximum' => 1}}
                                     ]),
     {ok, _} = emqtt:connect(Client1),
     {ok, _, [2]} = emqtt:subscribe(Client1, Topic1, qos2),
@@ -701,8 +722,8 @@ t_shared_subscriptions_client_terminates_when_qos_eq_2(_) ->
     SharedTopic = list_to_binary("$share/sharename/" ++ binary_to_list(<<"TopicA">>)),
 
     CRef = counters:new(1, [atomics]),
-    meck:expect(emqtt, connected, 
-                fun(cast, ?PUBLISH_PACKET(?QOS_2, _PacketId), _State) -> 
+    meck:expect(emqtt, connected,
+                fun(cast, ?PUBLISH_PACKET(?QOS_2, _PacketId), _State) ->
                                         ok = counters:add(CRef, 1, 1),
                                         {stop, {shutdown, for_testiong}};
                     (Arg1, ARg2, Arg3) -> meck:passthrough([Arg1, ARg2, Arg3])

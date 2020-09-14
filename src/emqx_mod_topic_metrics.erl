@@ -97,14 +97,14 @@
 
 load(_Env) ->
     emqx_mod_sup:start_child(?MODULE, worker),
-    emqx:hook('message.publish', fun ?MODULE:on_message_publish/1, []),
-    emqx:hook('message.dropped', fun ?MODULE:on_message_dropped/3, []),
-    emqx:hook('message.delivered', fun ?MODULE:on_message_delivered/2, []).
+    emqx:hook('message.publish',   {?MODULE, on_message_publish, []}),
+    emqx:hook('message.dropped',   {?MODULE, on_message_dropped, []}),
+    emqx:hook('message.delivered', {?MODULE, on_message_delivered, []}).
 
 unload(_Env) ->
-    emqx:unhook('message.publish', fun ?MODULE:on_message_publish/1),
-    emqx:unhook('message.dropped', fun ?MODULE:on_message_dropped/3),
-    emqx:unhook('message.delivered', fun ?MODULE:on_message_delivered/2),
+    emqx:unhook('message.publish',   {?MODULE, on_message_publish}),
+    emqx:unhook('message.dropped',   {?MODULE, on_message_dropped}),
+    emqx:unhook('message.delivered', {?MODULE, on_message_delivered}),
     emqx_mod_sup:stop_child(?MODULE).
 
 description() ->
@@ -155,18 +155,28 @@ inc(Topic, Metric) ->
 
 inc(Topic, Metric, Val) ->
     case get_counters(Topic) of
-        {error, not_found} ->
-            {error, not_found};
+        {error, topic_not_found} ->
+            {error, topic_not_found};
         CRef ->
-            counters:add(CRef, metrics_idx(Metric), Val)
+            case metric_idx(Metric) of
+                {error, invalid_metric} ->
+                    {error, invalid_metric};
+                Idx ->
+                    counters:add(CRef, Idx, Val)
+            end
     end.
 
 val(Topic, Metric) ->
     case ets:lookup(?TAB, Topic) of
         [] ->
-            {error, not_found};
+            {error, topic_not_found};
         [{Topic, CRef}] ->
-            counters:get(CRef, metrics_idx(Metric))
+            case metric_idx(Metric) of
+                {error, invalid_metric} ->
+                    {error, invalid_metric};
+                Idx ->
+                    counters:get(CRef, Idx)
+            end
     end.
 
 rate(Topic, Metric) ->
@@ -175,10 +185,10 @@ rate(Topic, Metric) ->
 metrics(Topic) ->
     case ets:lookup(?TAB, Topic) of
         [] ->
-            {error, not_found};
+            {error, topic_not_found};
         [{Topic, CRef}] ->
             lists:foldl(fun(Metric, Acc) ->
-                            [{to_count(Metric), counters:get(CRef, metrics_idx(Metric))},
+                            [{to_count(Metric), counters:get(CRef, metric_idx(Metric))},
                              {to_rate(Metric), rate(Topic, Metric)} | Acc]
                         end, [], ?TOPIC_METRICS)
     end.
@@ -237,28 +247,20 @@ handle_call({unregister, Topic}, _From, State = #state{speeds = Speeds}) ->
             {reply, ok, State};
         true ->
             ok = delete_counters(Topic),
-            {reply, ok, State#state{speeds = maps:remove(Topic, Speeds)}}
-    end;
-
-handle_call({get_rate, Topic}, _From, State = #state{speeds = Speeds}) ->
-    case is_registered(Topic) of
-        false ->
-            {reply, {error, not_found}, State};
-        true ->
-            lists:foldl(fun(Metric, Acc) ->
-                            Speed = maps:get({Topic, Metric}, Speeds),
-                            [{Metric, Speed#speed.last} | Acc]
-                        end, [], ?TOPIC_METRICS)
+            NSpeeds = lists:foldl(fun(Metric, Acc) ->
+                                      maps:remove({Topic, Metric}, Acc)
+                                  end, Speeds, ?TOPIC_METRICS),
+            {reply, ok, State#state{speeds = NSpeeds}}
     end;
 
 handle_call({get_rate, Topic, Metric}, _From, State = #state{speeds = Speeds}) ->
     case is_registered(Topic) of
         false ->
-            {reply, {error, not_found}, State};
+            {reply, {error, topic_not_found}, State};
         true ->
             case maps:get({Topic, Metric}, Speeds, undefined) of
                 undefined ->
-                    {reply, {error, not_found}, State};
+                    {reply, {error, invalid_metric}, State};
                 #speed{last = Last} ->
                     {reply, Last, State}
             end
@@ -272,7 +274,7 @@ handle_info(ticking, State = #state{speeds = Speeds}) ->
     NSpeeds = maps:map(
             fun({Topic, Metric}, Speed) ->
                 case val(Topic, Metric) of
-                    {error, not_found} -> maps:remove(Topic, Speeds);
+                    {error, topic_not_found} -> maps:remove({Topic, Metric}, Speeds);
                     Val -> calculate_speed(Val, Speed)
                 end
             end, Speeds),
@@ -290,15 +292,17 @@ terminate(_Reason, _State) ->
 %% Internal Functions
 %%------------------------------------------------------------------------------
 
-metrics_idx('messages.in') ->       01;
-metrics_idx('messages.out') ->      02;
-metrics_idx('messages.qos0.in') ->  03;
-metrics_idx('messages.qos0.out') -> 04;
-metrics_idx('messages.qos1.in') ->  05;
-metrics_idx('messages.qos1.out') -> 06;
-metrics_idx('messages.qos2.in') ->  07;
-metrics_idx('messages.qos2.out') -> 08;
-metrics_idx('messages.dropped') ->  09.
+metric_idx('messages.in') ->       01;
+metric_idx('messages.out') ->      02;
+metric_idx('messages.qos0.in') ->  03;
+metric_idx('messages.qos0.out') -> 04;
+metric_idx('messages.qos1.in') ->  05;
+metric_idx('messages.qos1.out') -> 06;
+metric_idx('messages.qos2.in') ->  07;
+metric_idx('messages.qos2.out') -> 08;
+metric_idx('messages.dropped') ->  09;
+metric_idx(_) ->
+    {error, invalid_metric}.
 
 to_count('messages.in') ->
     'messages.in.count';
@@ -344,7 +348,7 @@ delete_counters(Topic) ->
 
 get_counters(Topic) ->
     case ets:lookup(?TAB, Topic) of
-        [] -> {error, not_found};
+        [] -> {error, topic_not_found};
         [{Topic, CRef}] -> CRef
     end.
 

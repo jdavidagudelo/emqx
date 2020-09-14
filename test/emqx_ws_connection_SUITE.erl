@@ -112,7 +112,7 @@ t_info(_) ->
      } = SockInfo.
 
 t_info_limiter(_) ->
-    St = st(#{limiter => emqx_limiter:init([])}),
+    St = st(#{limiter => emqx_limiter:init(external, [])}),
     ?assertEqual(undefined, ?ws_conn:info(limiter, St)).
 
 t_info_channel(_) ->
@@ -291,9 +291,7 @@ t_handle_timeout_emit_stats(_) ->
     ?assertEqual(undefined, ?ws_conn:info(stats_timer, St)).
 
 t_ensure_rate_limit(_) ->
-    Limiter = emqx_limiter:init([{pub_limit, {1, 10}},
-                                 {rate_limit, {100, 1000}}
-                                ]),
+    Limiter = emqx_limiter:init(external, {1, 10}, {100, 1000}, []),
     St = st(#{limiter => Limiter}),
     St1 = ?ws_conn:ensure_rate_limit(#{cnt => 0, oct => 0}, St),
     St2 = ?ws_conn:ensure_rate_limit(#{cnt => 11, oct => 1200}, St1),
@@ -304,7 +302,7 @@ t_parse_incoming(_) ->
     St = ?ws_conn:parse_incoming(<<48,3>>, st()),
     St1 = ?ws_conn:parse_incoming(<<0,1,116>>, St),
     Packet = ?PUBLISH_PACKET(?QOS_0, <<"t">>, undefined, <<>>),
-    [{incoming, Packet}] = ?ws_conn:info(postponed, St1).
+    ?assertMatch([{incoming, Packet}], ?ws_conn:info(postponed, St1)).
 
 t_parse_incoming_frame_error(_) ->
     St = ?ws_conn:parse_incoming(<<3,2,1,0>>, st()),
@@ -321,8 +319,9 @@ t_handle_outgoing(_) ->
     Packets = [?PUBLISH_PACKET(?QOS_1, <<"t1">>, 1, <<"payload">>),
                ?PUBLISH_PACKET(?QOS_2, <<"t2">>, 2, <<"payload">>)
               ],
-    {{binary, IoData}, _St} = ?ws_conn:handle_outgoing(Packets, st()),
-    ?assert(is_binary(iolist_to_binary(IoData))).
+    {[{binary, IoData1}, {binary, IoData2}], _St} = ?ws_conn:handle_outgoing(Packets, st()),
+    ?assert(is_binary(iolist_to_binary(IoData1))),
+    ?assert(is_binary(iolist_to_binary(IoData2))).
 
 t_run_gc(_) ->
     GcSt = emqx_gc:init(#{count => 10, bytes => 100}),

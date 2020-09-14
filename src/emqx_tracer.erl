@@ -57,6 +57,8 @@
         L =:= info orelse
         L =:= debug).
 
+-dialyzer({nowarn_function, [install_trace_handler/3]}).
+
 %%------------------------------------------------------------------------------
 %% APIs
 %%------------------------------------------------------------------------------
@@ -68,7 +70,7 @@ trace(publish, #message{from = From, topic = Topic, payload = Payload})
     emqx_logger:info(#{topic => Topic, mfa => {?MODULE, ?FUNCTION_NAME, ?FUNCTION_ARITY} }, "PUBLISH to ~s: ~0p", [Topic, Payload]).
 
 %% @doc Start to trace clientid or topic.
--spec(start_trace(trace_who(), logger:level(), string()) -> ok | {error, term()}).
+-spec(start_trace(trace_who(), logger:level() | all, string()) -> ok | {error, term()}).
 start_trace(Who, all, LogFile) ->
     start_trace(Who, debug, LogFile);
 start_trace(Who, Level, LogFile) ->
@@ -95,7 +97,7 @@ stop_trace(Who) ->
 %% @doc Lookup all traces
 -spec(lookup_traces() -> [{Who :: trace_who(), LogFile :: string()}]).
 lookup_traces() ->
-    lists:foldl(fun filter_traces/2, [], emqx_logger:get_log_handlers()).
+    lists:foldl(fun filter_traces/2, [], emqx_logger:get_log_handlers(started)).
 
 install_trace_handler(Who, Level, LogFile) ->
     case logger:add_handler(handler_id(Who), logger_disk_log_h,
@@ -123,7 +125,7 @@ uninstall_trance_handler(Who) ->
             {error, Reason}
     end.
 
-filter_traces({Id, Level, Dst}, Acc) ->
+filter_traces(#{id := Id, level := Level, dst := Dst}, Acc) ->
     case atom_to_list(Id) of
         ?TOPIC_TRACE_ID(T)->
             [{?TOPIC_TRACE(T), {Level,Dst}} | Acc];

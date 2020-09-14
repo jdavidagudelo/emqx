@@ -63,6 +63,9 @@
 
 -export_type([ payload/0
              , message/0
+             , flag/0
+             , flags/0
+             , headers/0
              ]).
 
 -export_type([ deliver/0
@@ -75,8 +78,7 @@
              , route_entry/0
              ]).
 
--export_type([ alarm/0
-             , plugin/0
+-export_type([ plugin/0
              , banned/0
              , command/0
              ]).
@@ -133,7 +135,7 @@
                         is_bridge    := boolean(),
                         is_superuser := boolean(),
                         mountpoint   := maybe(binary()),
-                        ws_cookie    := maybe(list()),
+                        ws_cookie    => maybe(list()),
                         password     => maybe(binary()),
                         auth_result  => auth_result(),
                         anonymous    => boolean(),
@@ -179,23 +181,31 @@
 -type(subscriber() :: {pid(), subid()}).
 -type(payload() :: binary() | iodata()).
 -type(message() :: #message{}).
+-type(flag() :: sys | dup | retain | atom()).
+-type(flags() :: #{flag() := boolean()}).
+-type(headers() :: #{proto_ver => ver(),
+                     protocol => protocol(),
+                     username => username(),
+                     peerhost => peerhost(),
+                     properties => properties(),
+                     atom() => term()}).
+
 -type(banned() :: #banned{}).
 -type(deliver() :: {deliver, topic(), message()}).
 -type(delivery() :: #delivery{}).
--type(deliver_result() :: ok | {error, term()}).
+-type(deliver_result() :: ok | {ok, non_neg_integer()} | {error, term()}).
 -type(publish_result() :: [{node(), topic(), deliver_result()} |
                            {share, topic(), deliver_result()}]).
 -type(route() :: #route{}).
 -type(sub_group() :: tuple() | binary()).
 -type(route_entry() :: {topic(), node()} | {topic, sub_group()}).
--type(alarm() :: #alarm{}).
 -type(plugin() :: #plugin{}).
 -type(command() :: #command{}).
 
 -type(caps() :: emqx_mqtt_caps:caps()).
 -type(attrs() :: #{atom() => term()}).
 -type(infos() :: #{atom() => term()}).
--type(stats() :: #{atom() => non_neg_integer()|stats()}).
+-type(stats() :: [{atom(), term()}]).
 
 -type(oom_policy() :: #{message_queue_len => non_neg_integer(),
                         max_heap_size => non_neg_integer()

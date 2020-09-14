@@ -62,9 +62,9 @@
           %% MQTT ClientInfo
           clientinfo :: emqx_types:clientinfo(),
           %% MQTT Session
-          session :: emqx_session:session(),
+          session :: maybe(emqx_session:session()),
           %% Keepalive
-          keepalive :: emqx_keepalive:keepalive(),
+          keepalive :: maybe(emqx_keepalive:keepalive()),
           %% MQTT Will Msg
           will_msg :: maybe(emqx_types:message()),
           %% MQTT Topic Aliases
@@ -73,6 +73,8 @@
           alias_maximum :: maybe(map()),
           %% Authentication Data Cache
           auth_cache :: maybe(map()),
+          %% Quota checkers
+          quota :: maybe(emqx_limiter:limiter()),
           %% Timers
           timers :: #{atom() => disabled | maybe(reference())},
           %% Conn State
@@ -103,10 +105,13 @@
           retry_timer  => retry_delivery,
           await_timer  => expire_awaiting_rel,
           expire_timer => expire_session,
-          will_timer   => will_message
+          will_timer   => will_message,
+          quota_timer  => expire_quota_limit
          }).
 
 -define(INFO_KEYS, [conninfo, conn_state, clientinfo, session, will_msg]).
+
+-dialyzer({no_match, [shutdown/4, ensure_timer/2, interval/2]}).
 
 %%--------------------------------------------------------------------
 %% Info, Attrs and Caps
@@ -165,6 +170,7 @@ init(ConnInfo = #{peername := {PeerHost, _Port},
     Peercert = maps:get(peercert, ConnInfo, undefined),
     Protocol = maps:get(protocol, ConnInfo, mqtt),
     MountPoint = emqx_zone:mountpoint(Zone),
+    QuotaPolicy = emqx_zone:quota_policy(Zone),
     ClientInfo = setting_peercert_infos(
                    Peercert,
                    #{zone         => Zone,
@@ -183,6 +189,7 @@ init(ConnInfo = #{peername := {PeerHost, _Port},
                                outbound => #{}
                               },
              auth_cache = #{},
+             quota      = emqx_limiter:init(Zone, QuotaPolicy),
              timers     = #{},
              conn_state = idle,
              takeover   = false,
@@ -281,14 +288,14 @@ handle_in(Packet = ?PUBLISH_PACKET(_QoS), Channel) ->
             handle_out(disconnect, ReasonCode, Channel)
     end;
 
-handle_in(?PUBACK_PACKET(PacketId, _ReasonCode), Channel
+handle_in(?PUBACK_PACKET(PacketId, _ReasonCode, Properties), Channel
           = #channel{clientinfo = ClientInfo, session = Session}) ->
     case emqx_session:puback(PacketId, Session) of
         {ok, Msg, NSession} ->
-            ok = after_message_acked(ClientInfo, Msg),
+            ok = after_message_acked(ClientInfo, Msg, Properties),
             {ok, Channel#channel{session = NSession}};
         {ok, Msg, Publishes, NSession} ->
-            ok = after_message_acked(ClientInfo, Msg),
+            ok = after_message_acked(ClientInfo, Msg, Properties),
             handle_out(publish, Publishes, Channel#channel{session = NSession});
         {error, ?RC_PACKET_IDENTIFIER_IN_USE} ->
             ?LOG(warning, "The PUBACK PacketId ~w is inuse.", [PacketId]),
@@ -300,11 +307,11 @@ handle_in(?PUBACK_PACKET(PacketId, _ReasonCode), Channel
             {ok, Channel}
     end;
 
-handle_in(?PUBREC_PACKET(PacketId, _ReasonCode), Channel
+handle_in(?PUBREC_PACKET(PacketId, _ReasonCode, Properties), Channel
           = #channel{clientinfo = ClientInfo, session = Session}) ->
     case emqx_session:pubrec(PacketId, Session) of
         {ok, Msg, NSession} ->
-            ok = after_message_acked(ClientInfo, Msg),
+            ok = after_message_acked(ClientInfo, Msg, Properties),
             NChannel = Channel#channel{session = NSession},
             handle_out(pubrel, {PacketId, ?RC_SUCCESS}, NChannel);
         {error, RC = ?RC_PACKET_IDENTIFIER_IN_USE} ->
@@ -347,12 +354,12 @@ handle_in(Packet = ?SUBSCRIBE_PACKET(PacketId, Properties, TopicFilters),
           Channel = #channel{clientinfo = ClientInfo = #{zone := Zone}}) ->
     case emqx_packet:check(Packet) of
         ok -> TopicFilters1 = parse_topic_filters(TopicFilters),
-              TopicFilters2 = enrich_subid(Properties, TopicFilters1),
+              TopicFilters2 = put_subid_in_subopts(Properties, TopicFilters1),
               TopicFilters3 = run_hooks('client.subscribe',
                                         [ClientInfo, Properties],
                                         TopicFilters2
                                        ),
-              {ReasonCodes, NChannel} = process_subscribe(TopicFilters3, Channel),
+              {ReasonCodes, NChannel} = process_subscribe(TopicFilters3, Properties, Channel),
               case emqx_zone:get_env(Zone, acl_deny_action, ignore) =:= disconnect andalso
                    lists:any(fun(ReasonCode) ->
                                  ReasonCode =:= ?RC_NOT_AUTHORIZED
@@ -373,7 +380,7 @@ handle_in(Packet = ?UNSUBSCRIBE_PACKET(PacketId, Properties, TopicFilters),
                                         [ClientInfo, Properties],
                                         parse_topic_filters(TopicFilters)
                                        ),
-              {ReasonCodes, NChannel} = process_unsubscribe(TopicFilters1, Channel),
+              {ReasonCodes, NChannel} = process_unsubscribe(TopicFilters1, Properties, Channel),
               handle_out(unsuback, {PacketId, ReasonCodes}, NChannel);
         {error, ReasonCode} ->
             handle_out(disconnect, ReasonCode, Channel)
@@ -382,8 +389,8 @@ handle_in(Packet = ?UNSUBSCRIBE_PACKET(PacketId, Properties, TopicFilters),
 handle_in(?PACKET(?PINGREQ), Channel) ->
     {ok, ?PACKET(?PINGRESP), Channel};
 
-handle_in(?DISCONNECT_PACKET(ReasonCode, Properties), Channel) ->
-    NChannel = maybe_clean_will_msg(ReasonCode, Channel),
+handle_in(?DISCONNECT_PACKET(ReasonCode, Properties), Channel = #channel{conninfo = ConnInfo}) ->
+    NChannel = maybe_clean_will_msg(ReasonCode, Channel#channel{conninfo = ConnInfo#{disconn_props => Properties}}),
     process_disconnect(ReasonCode, Properties, NChannel);
 
 handle_in(?AUTH_PACKET(), Channel) ->
@@ -437,9 +444,10 @@ process_connect(AckProps, Channel = #channel{conninfo = #{clean_start := CleanSt
 %% Process Publish
 %%--------------------------------------------------------------------
 
-process_publish(Packet = ?PUBLISH_PACKET(QoS, Topic, PacketId), 
+process_publish(Packet = ?PUBLISH_PACKET(QoS, Topic, PacketId),
                 Channel = #channel{clientinfo = #{zone := Zone}}) ->
-    case pipeline([fun process_alias/2,
+    case pipeline([fun check_quota_exceeded/2,
+                   fun process_alias/2,
                    fun check_pub_alias/2,
                    fun check_pub_acl/2,
                    fun check_pub_caps/2
@@ -447,49 +455,74 @@ process_publish(Packet = ?PUBLISH_PACKET(QoS, Topic, PacketId),
         {ok, NPacket, NChannel} ->
             Msg = packet_to_message(NPacket, NChannel),
             do_publish(PacketId, Msg, NChannel);
-        {error, ReasonCode, NChannel} when ReasonCode =:= ?RC_NOT_AUTHORIZED ->
+        {error, Rc = ?RC_NOT_AUTHORIZED, NChannel} ->
             ?LOG(warning, "Cannot publish message to ~s due to ~s.",
-                 [Topic, emqx_reason_codes:text(ReasonCode)]),
+                 [Topic, emqx_reason_codes:text(Rc)]),
             case emqx_zone:get_env(Zone, acl_deny_action, ignore) of
                 ignore ->
                     case QoS of
                        ?QOS_0 -> {ok, NChannel};
                         _ ->
-                           handle_out(puback, {PacketId, ReasonCode}, NChannel) 
+                           handle_out(puback, {PacketId, Rc}, NChannel)
                     end;
                 disconnect ->
-                    handle_out(disconnect, ReasonCode, NChannel)
+                    handle_out(disconnect, Rc, NChannel)
             end;
-        {error, ReasonCode, NChannel} ->
+        {error, Rc = ?RC_QUOTA_EXCEEDED, NChannel} ->
+            ?LOG(warning, "Cannot publish messages to ~s due to ~s.",
+                 [Topic, emqx_reason_codes:text(Rc)]),
+            case QoS of
+                ?QOS_0 ->
+                    ok = emqx_metrics:inc('packets.publish.dropped'),
+                    {ok, NChannel};
+                ?QOS_1 ->
+                    handle_out(puback, {PacketId, Rc}, NChannel);
+                ?QOS_2 ->
+                    handle_out(pubrec, {PacketId, Rc}, NChannel)
+            end;
+        {error, Rc, NChannel} ->
             ?LOG(warning, "Cannot publish message to ~s due to ~s.",
-                 [Topic, emqx_reason_codes:text(ReasonCode)]),
-            handle_out(disconnect, ReasonCode, NChannel)
+                 [Topic, emqx_reason_codes:text(Rc)]),
+            handle_out(disconnect, Rc, NChannel)
     end.
 
-packet_to_message(Packet, #channel{conninfo = #{proto_ver := ProtoVer},
-                                   clientinfo = ClientInfo =
-                                   #{mountpoint := MountPoint}}) ->
-    emqx_mountpoint:mount(
-      MountPoint, emqx_packet:to_message(
-                    ClientInfo, #{proto_ver => ProtoVer}, Packet)).
+packet_to_message(Packet, #channel{
+                    conninfo = #{proto_ver := ProtoVer},
+                    clientinfo = #{
+                        protocol := Protocol,
+                        clientid := ClientId,
+                        username := Username,
+                        peerhost := PeerHost,
+                        mountpoint := MountPoint
+                    }
+                }) ->
+    emqx_mountpoint:mount(MountPoint,
+        emqx_packet:to_message(
+            Packet, ClientId,
+            #{proto_ver => ProtoVer,
+              protocol => Protocol,
+              username => Username,
+              peerhost => PeerHost})).
 
 do_publish(_PacketId, Msg = #message{qos = ?QOS_0}, Channel) ->
-    _ = emqx_broker:publish(Msg),
-    {ok, Channel};
+    Result = emqx_broker:publish(Msg),
+    NChannel = ensure_quota(Result, Channel),
+    {ok, NChannel};
 
 do_publish(PacketId, Msg = #message{qos = ?QOS_1}, Channel) ->
-    Results = emqx_broker:publish(Msg),
-    RC = puback_reason_code(Results),
-    handle_out(puback, {PacketId, RC}, Channel);
+    PubRes = emqx_broker:publish(Msg),
+    RC = puback_reason_code(PubRes),
+    NChannel = ensure_quota(PubRes, Channel),
+    handle_out(puback, {PacketId, RC}, NChannel);
 
 do_publish(PacketId, Msg = #message{qos = ?QOS_2},
            Channel = #channel{session = Session}) ->
     case emqx_session:publish(PacketId, Msg, Session) of
-        {ok, Results, NSession} ->
-            RC = puback_reason_code(Results),
-            NChannel = Channel#channel{session = NSession},
-            NChannel1 = ensure_timer(await_timer, NChannel),
-            handle_out(pubrec, {PacketId, RC}, NChannel1);
+        {ok, PubRes, NSession} ->
+            RC = puback_reason_code(PubRes),
+            NChannel1 = ensure_timer(await_timer, Channel#channel{session = NSession}),
+            NChannel2 = ensure_quota(PubRes, NChannel1),
+            handle_out(pubrec, {PacketId, RC}, NChannel2);
         {error, RC = ?RC_PACKET_IDENTIFIER_IN_USE} ->
             ok = emqx_metrics:inc('packets.publish.inuse'),
             handle_out(pubrec, {PacketId, RC}, Channel);
@@ -500,98 +533,89 @@ do_publish(PacketId, Msg = #message{qos = ?QOS_2},
             handle_out(pubrec, {PacketId, RC}, Channel)
     end.
 
+ensure_quota(_, Channel = #channel{quota = undefined}) ->
+    Channel;
+ensure_quota(PubRes, Channel = #channel{quota = Limiter}) ->
+    Cnt = lists:foldl(
+              fun({_, _, ok}, N) -> N + 1;
+                 ({_, _, {ok, I}}, N) -> N + I;
+                 (_, N) -> N
+              end, 1, PubRes),
+    case emqx_limiter:check(#{cnt => Cnt, oct => 0}, Limiter) of
+        {ok, NLimiter} ->
+            Channel#channel{quota = NLimiter};
+        {pause, Intv, NLimiter} ->
+            ensure_timer(quota_timer, Intv, Channel#channel{quota = NLimiter})
+    end.
+
 -compile({inline, [puback_reason_code/1]}).
 puback_reason_code([])    -> ?RC_NO_MATCHING_SUBSCRIBERS;
 puback_reason_code([_|_]) -> ?RC_SUCCESS.
 
--compile({inline, [after_message_acked/2]}).
-after_message_acked(ClientInfo, Msg) ->
+-compile({inline, [after_message_acked/3]}).
+after_message_acked(ClientInfo, Msg, PubAckProps) ->
     ok = emqx_metrics:inc('messages.acked'),
-    emqx_hooks:run('message.acked', [ClientInfo, Msg]).
+    emqx_hooks:run('message.acked', [ClientInfo,
+        emqx_message:set_header(puback_props, PubAckProps, Msg)]).
 
 %%--------------------------------------------------------------------
 %% Process Subscribe
 %%--------------------------------------------------------------------
 
--compile({inline, [process_subscribe/2]}).
-process_subscribe(TopicFilters, Channel) ->
-    process_subscribe(TopicFilters, [], Channel).
+-compile({inline, [process_subscribe/3]}).
+process_subscribe(TopicFilters, SubProps, Channel) ->
+    process_subscribe(TopicFilters, SubProps, Channel, []).
 
-process_subscribe([], Acc, Channel) ->
+process_subscribe([], _SubProps, Channel, Acc) ->
     {lists:reverse(Acc), Channel};
 
-process_subscribe([{TopicFilter, SubOpts}|More], Acc, Channel) ->
-    {RC, NChannel} = do_subscribe(TopicFilter, SubOpts, Channel),
-    process_subscribe(More, [RC|Acc], NChannel).
+process_subscribe([{TopicFilter, SubOpts}|More], SubProps, Channel, Acc) ->
+    case check_subscribe(TopicFilter, SubOpts, Channel) of
+         ok ->
+            {RC, NChannel} = do_subscribe(TopicFilter, SubOpts#{sub_props => SubProps}, Channel),
+            process_subscribe(More, SubProps, NChannel, [RC|Acc]);
+        {error, RC} ->
+            ?LOG(warning, "Cannot subscribe ~s due to ~s.", [TopicFilter, emqx_reason_codes:text(RC)]),
+            process_subscribe(More, SubProps, Channel, [RC|Acc])
+    end.
 
 do_subscribe(TopicFilter, SubOpts = #{qos := QoS}, Channel =
              #channel{clientinfo = ClientInfo = #{mountpoint := MountPoint},
                       session = Session}) ->
-    case check_subscribe(TopicFilter, SubOpts, Channel) of
-        ok -> TopicFilter1 = emqx_mountpoint:mount(MountPoint, TopicFilter),
-              SubOpts1 = enrich_subopts(maps:merge(?DEFAULT_SUBOPTS, SubOpts), Channel),
-              case emqx_session:subscribe(ClientInfo, TopicFilter1, SubOpts1, Session) of
-                  {ok, NSession} ->
-                      {QoS, Channel#channel{session = NSession}};
-                  {error, RC} -> {RC, Channel}
-              end;
-        {error, RC} -> {RC, Channel}
+    NTopicFilter = emqx_mountpoint:mount(MountPoint, TopicFilter),
+    NSubOpts = enrich_subopts(maps:merge(?DEFAULT_SUBOPTS, SubOpts), Channel),
+    case emqx_session:subscribe(ClientInfo, NTopicFilter, NSubOpts, Session) of
+        {ok, NSession} ->
+            {QoS, Channel#channel{session = NSession}};
+        {error, RC} ->
+            ?LOG(warning, "Cannot subscribe ~s due to ~s.", [TopicFilter, emqx_reason_codes:text(RC)]),
+            {RC, Channel}
     end.
-
--compile({inline, [process_force_subscribe/2]}).
-process_force_subscribe(Subscriptions, Channel =
-             #channel{clientinfo = ClientInfo = #{mountpoint := MountPoint},
-                      session = Session}) ->
-    lists:foldl(fun({TopicFilter, SubOpts = #{qos := QoS}}, {ReasonCodes, ChannelAcc}) ->
-                    NTopicFilter = emqx_mountpoint:mount(MountPoint, TopicFilter),
-                    NSubOpts = enrich_subopts(maps:merge(?DEFAULT_SUBOPTS, SubOpts), ChannelAcc),
-                    case emqx_session:subscribe(ClientInfo, NTopicFilter, NSubOpts, Session) of
-                        {ok, NSession} ->
-                            {ReasonCodes ++ [QoS], ChannelAcc#channel{session = NSession}};
-                        {error, ReasonCode} ->
-                            {ReasonCodes ++ [ReasonCode], ChannelAcc}
-                    end
-                end, {[], Channel}, Subscriptions).
 
 %%--------------------------------------------------------------------
 %% Process Unsubscribe
 %%--------------------------------------------------------------------
 
--compile({inline, [process_unsubscribe/2]}).
-process_unsubscribe(TopicFilters, Channel) ->
-    process_unsubscribe(TopicFilters, [], Channel).
+-compile({inline, [process_unsubscribe/3]}).
+process_unsubscribe(TopicFilters, UnSubProps, Channel) ->
+    process_unsubscribe(TopicFilters, UnSubProps, Channel, []).
 
-process_unsubscribe([], Acc, Channel) ->
+process_unsubscribe([], _UnSubProps, Channel, Acc) ->
     {lists:reverse(Acc), Channel};
 
-process_unsubscribe([{TopicFilter, SubOpts}|More], Acc, Channel) ->
-    {RC, NChannel} = do_unsubscribe(TopicFilter, SubOpts, Channel),
-    process_unsubscribe(More, [RC|Acc], NChannel).
+process_unsubscribe([{TopicFilter, SubOpts}|More], UnSubProps, Channel, Acc) ->
+    {RC, NChannel} = do_unsubscribe(TopicFilter, SubOpts#{unsub_props => UnSubProps}, Channel),
+    process_unsubscribe(More, UnSubProps, NChannel, [RC|Acc]).
 
-do_unsubscribe(TopicFilter, _SubOpts, Channel =
+do_unsubscribe(TopicFilter, SubOpts, Channel =
                #channel{clientinfo = ClientInfo = #{mountpoint := MountPoint},
                         session = Session}) ->
     TopicFilter1 = emqx_mountpoint:mount(MountPoint, TopicFilter),
-    case emqx_session:unsubscribe(ClientInfo, TopicFilter1, Session) of
+    case emqx_session:unsubscribe(ClientInfo, TopicFilter1, SubOpts, Session) of
         {ok, NSession} ->
             {?RC_SUCCESS, Channel#channel{session = NSession}};
         {error, RC} -> {RC, Channel}
     end.
-
--compile({inline, [process_force_unsubscribe/2]}).
-process_force_unsubscribe(Subscriptions, Channel =
-               #channel{clientinfo = ClientInfo = #{mountpoint := MountPoint},
-                        session = Session}) ->
-    lists:foldl(fun({TopicFilter, _SubOpts}, {ReasonCodes, ChannelAcc}) ->
-                    NTopicFilter = emqx_mountpoint:mount(MountPoint, TopicFilter),
-                    case emqx_session:unsubscribe(ClientInfo, NTopicFilter, Session) of
-                        {ok, NSession} ->
-                            {ReasonCodes ++ [?RC_SUCCESS], ChannelAcc#channel{session = NSession}};
-                        {error, ReasonCode} ->
-                            {ReasonCodes ++ [ReasonCode], ChannelAcc}
-                    end
-                end, {[], Channel}, Subscriptions).
-
 %%--------------------------------------------------------------------
 %% Process Disconnect
 %%--------------------------------------------------------------------
@@ -662,6 +686,7 @@ not_nacked({deliver, _Topic, Msg}) ->
 handle_out(connack, {?RC_SUCCESS, SP, Props}, Channel = #channel{conninfo = ConnInfo}) ->
     AckProps = run_fold([fun enrich_connack_caps/2,
                          fun enrich_server_keepalive/2,
+                         fun enrich_response_information/2,
                          fun enrich_assigned_clientid/2
                         ], Props, Channel),
     NAckProps = run_hooks('client.connack', [ConnInfo, emqx_reason_codes:name(?RC_SUCCESS)], AckProps),
@@ -806,7 +831,8 @@ return_unsuback(Packet, Channel) ->
 
 -spec(handle_call(Req :: term(), channel())
       -> {reply, Reply :: term(), channel()}
-       | {shutdown, Reason :: term(), Reply :: term(), channel()}).
+       | {shutdown, Reason :: term(), Reply :: term(), channel()}
+       | {shutdown, Reason :: term(), Reply :: term(), emqx_types:packet(), channel()}).
 handle_call(kick, Channel) ->
     Channel1 = ensure_disconnected(kicked, Channel),
     disconnect_and_shutdown(kicked, ok, Channel1);
@@ -829,6 +855,11 @@ handle_call({takeover, 'end'}, Channel = #channel{session  = Session,
 handle_call(list_acl_cache, Channel) ->
     {reply, emqx_acl_cache:list_acl_cache(), Channel};
 
+handle_call({quota, Policy}, Channel) ->
+    Zone = info(zone, Channel),
+    Quota = emqx_limiter:init(Zone, Policy),
+    reply(ok, Channel#channel{quota = Quota});
+
 handle_call(Req, Channel) ->
     ?LOG(error, "Unexpected call: ~p", [Req]),
     reply(ignored, Channel).
@@ -839,28 +870,16 @@ handle_call(Req, Channel) ->
 
 -spec(handle_info(Info :: term(), channel())
       -> ok | {ok, channel()} | {shutdown, Reason :: term(), channel()}).
-handle_info({subscribe, TopicFilters}, Channel = #channel{clientinfo = ClientInfo}) ->
-    TopicFilters1 = run_hooks('client.subscribe',
-                              [ClientInfo, #{'Internal' => true}],
-                              parse_topic_filters(TopicFilters)
-                             ),
-    {_ReasonCodes, NChannel} = process_subscribe(TopicFilters1, Channel),
+
+handle_info({subscribe, TopicFilters}, Channel ) ->
+    {_, NChannel} = lists:foldl(
+        fun({TopicFilter, SubOpts}, {_, ChannelAcc}) ->
+            do_subscribe(TopicFilter, SubOpts, ChannelAcc)
+        end, {[], Channel}, parse_topic_filters(TopicFilters)),
     {ok, NChannel};
 
-handle_info({force_subscribe, TopicFilters}, Channel) ->
-    {_ReasonCodes, NChannel} = process_force_subscribe(parse_topic_filters(TopicFilters), Channel),
-    {ok, NChannel};
-
-handle_info({unsubscribe, TopicFilters}, Channel = #channel{clientinfo = ClientInfo}) ->
-    TopicFilters1 = run_hooks('client.unsubscribe',
-                              [ClientInfo, #{'Internal' => true}],
-                              parse_topic_filters(TopicFilters)
-                             ),
-    {_ReasonCodes, NChannel} = process_unsubscribe(TopicFilters1, Channel),
-    {ok, NChannel};
-
-handle_info({force_unsubscribe, TopicFilters}, Channel) ->
-    {_ReasonCodes, NChannel} = process_force_unsubscribe(parse_topic_filters(TopicFilters), Channel),
+handle_info({unsubscribe, TopicFilters}, Channel) ->
+    {_RC, NChannel} = process_unsubscribe(TopicFilters, #{}, Channel),
     {ok, NChannel};
 
 handle_info({sock_closed, Reason}, Channel = #channel{conn_state = idle}) ->
@@ -924,9 +943,6 @@ handle_timeout(_TRef, retry_delivery,
     case emqx_session:retry(Session) of
         {ok, NSession} ->
             {ok, clean_timer(retry_timer, Channel#channel{session = NSession})};
-        {ok, Publishes, NSession} ->
-            NChannel = Channel#channel{session = NSession},
-            handle_out(publish, Publishes, reset_timer(retry_timer, NChannel));
         {ok, Publishes, Timeout, NSession} ->
             NChannel = Channel#channel{session = NSession},
             handle_out(publish, Publishes, reset_timer(retry_timer, Timeout, NChannel))
@@ -950,6 +966,9 @@ handle_timeout(_TRef, expire_session, Channel) ->
 handle_timeout(_TRef, will_message, Channel = #channel{will_msg = WillMsg}) ->
     (WillMsg =/= undefined) andalso publish_will_msg(WillMsg),
     {ok, clean_timer(will_timer, Channel#channel{will_msg = undefined})};
+
+handle_timeout(_TRef, expire_quota_limit, Channel) ->
+    {ok, clean_timer(quota_timer, Channel)};
 
 handle_timeout(_TRef, Msg, Channel) ->
     ?LOG(error, "Unexpected timeout: ~p~n", [Msg]),
@@ -1001,6 +1020,7 @@ interval(will_timer, #channel{will_msg = WillMsg}) ->
 %% Terminate
 %%--------------------------------------------------------------------
 
+-spec(terminate(any(), channel()) -> ok).
 terminate(_, #channel{conn_state = idle}) -> ok;
 terminate(normal, Channel) ->
     run_terminate_hook(normal, Channel);
@@ -1176,7 +1196,7 @@ enhanced_auth(?CONNECT_PACKET(#mqtt_packet_connect{
     end;
 
 enhanced_auth(?AUTH_PACKET(_ReasonCode, Properties), Channel = #channel{conninfo = ConnInfo}) ->
-    AuthMethod = maps:get('Authentication-Method', maps:get(conn_props, ConnInfo), undefined),
+    AuthMethod = emqx_mqtt_props:get('Authentication-Method', emqx_mqtt_props:get(conn_props, ConnInfo, #{}), undefined),
     NAuthMethod = emqx_mqtt_props:get('Authentication-Method', Properties, undefined),
     AuthData = emqx_mqtt_props:get('Authentication-Data', Properties, undefined),
     case NAuthMethod =:= undefined orelse NAuthMethod =/= AuthMethod of
@@ -1235,14 +1255,17 @@ process_alias(_Packet, Channel) -> {ok, Channel}.
 %% Packing Topic Alias
 
 packing_alias(Packet = #mqtt_packet{
-                            variable = #mqtt_packet_publish{topic_name = Topic} = Publish
+                            variable = #mqtt_packet_publish{
+                                          topic_name = Topic,
+                                          properties = Prop
+                                         } = Publish
                         },
               Channel = ?IS_MQTT_V5 = #channel{topic_aliases = TopicAliases, alias_maximum = Limits}) ->
     case find_alias(outbound, Topic, TopicAliases) of
         {ok, AliasId} -> 
             NPublish = Publish#mqtt_packet_publish{
                             topic_name = <<>>,
-                            properties = #{'Topic-Alias' => AliasId}
+                            properties = maps:merge(Prop, #{'Topic-Alias' => AliasId})
                             },
             {Packet#mqtt_packet{variable = NPublish}, Channel};
         error ->
@@ -1255,13 +1278,22 @@ packing_alias(Packet = #mqtt_packet{
                     NChannel = Channel#channel{topic_aliases = NTopicAliases},
                     NPublish = Publish#mqtt_packet_publish{
                                     topic_name = Topic,
-                                    properties = #{'Topic-Alias' => AliasId}
+                                    properties = maps:merge(Prop, #{'Topic-Alias' => AliasId})
                                     },
                     {Packet#mqtt_packet{variable = NPublish}, NChannel};
                 false -> {Packet, Channel}
             end
     end;
 packing_alias(Packet, Channel) -> {Packet, Channel}.
+
+%%--------------------------------------------------------------------
+%% Check quota state
+
+check_quota_exceeded(_, #channel{timers = Timers}) ->
+    case maps:get(quota_timer, Timers, undefined) of
+        undefined -> ok;
+        _ -> {error, ?RC_QUOTA_EXCEEDED}
+    end.
 
 %%--------------------------------------------------------------------
 %% Check Pub Alias
@@ -1329,9 +1361,9 @@ check_sub_caps(TopicFilter, SubOpts, #channel{clientinfo = #{zone := Zone}}) ->
 %%--------------------------------------------------------------------
 %% Enrich SubId
 
-enrich_subid(#{'Subscription-Identifier' := SubId}, TopicFilters) ->
+put_subid_in_subopts(#{'Subscription-Identifier' := SubId}, TopicFilters) ->
     [{Topic, SubOpts#{subid => SubId}} || {Topic, SubOpts} <- TopicFilters];
-enrich_subid(_Properties, TopicFilters) -> TopicFilters.
+put_subid_in_subopts(_Properties, TopicFilters) -> TopicFilters.
 
 %%--------------------------------------------------------------------
 %% Enrich SubOpts
@@ -1378,6 +1410,16 @@ enrich_server_keepalive(AckProps, #channel{clientinfo = #{zone := Zone}}) ->
     case emqx_zone:server_keepalive(Zone) of
         undefined -> AckProps;
         Keepalive -> AckProps#{'Server-Keep-Alive' => Keepalive}
+    end.
+
+%%--------------------------------------------------------------------
+%% Enrich response information
+
+enrich_response_information(AckProps, #channel{conninfo = #{conn_props := ConnProps},
+                                               clientinfo = #{zone := Zone}}) ->
+    case emqx_mqtt_props:get('Request-Response-Information', ConnProps, 0) of
+        0 -> AckProps;
+        1 -> AckProps#{'Response-Information' => emqx_zone:response_information(Zone)}
     end.
 
 %%--------------------------------------------------------------------
@@ -1490,7 +1532,7 @@ mabye_publish_will_msg(Channel = #channel{will_msg = WillMsg}) ->
     end.
 
 will_delay_interval(WillMsg) ->
-    emqx_message:get_header('Will-Delay-Interval', WillMsg, 0).
+    maps:get('Will-Delay-Interval', emqx_message:get_header(properties, WillMsg), 0).
 
 publish_will_msg(Msg) -> emqx_broker:publish(Msg).
 

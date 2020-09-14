@@ -103,6 +103,13 @@
 
 -define(ENABLED(X), (X =/= undefined)).
 
+-dialyzer({no_match, [info/2]}).
+-dialyzer({nowarn_function, [ init/4
+                            , init_state/3
+                            , run_loop/2
+                            , system_terminate/4
+                            ]}).
+
 -spec(start_link(esockd:transport(), esockd:socket(), proplists:proplist())
       -> {ok, pid()}).
 start_link(Transport, Socket, Options) ->
@@ -191,7 +198,9 @@ init_state(Transport, Socket, Options) ->
     Zone = proplists:get_value(zone, Options),
     ActiveN = proplists:get_value(active_n, Options, ?ACTIVE_N),
     PubLimit = emqx_zone:publish_limit(Zone),
-    Limiter = emqx_limiter:init([{pub_limit, PubLimit}|Options]),
+    BytesIn = proplists:get_value(rate_limit, Options),
+    RateLimit = emqx_zone:ratelimit(Zone),
+    Limiter = emqx_limiter:init(Zone, PubLimit, BytesIn, RateLimit),
     FrameOpts = emqx_zone:mqtt_frame_options(Zone),
     ParseState = emqx_frame:initial_parse_state(FrameOpts),
     Serialize = emqx_frame:serialize_fun(),
@@ -445,6 +454,11 @@ handle_call(_From, info, State) ->
 
 handle_call(_From, stats, State) ->
     {reply, stats(State), State};
+
+handle_call(_From, {ratelimit, Policy}, State = #state{channel = Channel}) ->
+    Zone = emqx_channel:info(zone, Channel),
+    Limiter = emqx_limiter:init(Zone, Policy),
+    {reply, ok, State#state{limiter = Limiter}};
 
 handle_call(_From, Req, State = #state{channel = Channel}) ->
     case emqx_channel:handle_call(Req, Channel) of
