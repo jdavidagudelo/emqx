@@ -36,12 +36,6 @@
 -export([reason/1]).
 -endif.
 
-
-decode_client_id(ClientId) when is_binary(ClientId) ->
-    binary:bin_to_list(ClientId);
-decode_client_id(ClientId) ->
-    ClientId.
-
 load(Env) ->
     emqx_hooks:add('client.connected',    {?MODULE, on_client_connected, [Env]}),
     emqx_hooks:add('client.disconnected', {?MODULE, on_client_disconnected, [Env]}).
@@ -59,14 +53,14 @@ on_client_connected(ClientInfo = #{clientid := ClientId}, ConnInfo, Env) ->
     case emqx_json:safe_encode(Presence) of
         {ok, Payload} ->
             emqx_broker:safe_publish(
-              make_msg(qos(Env), topic(connected, decode_client_id(ClientId)), Payload));
+              make_msg(qos(Env), topic(connected, ClientId), Payload));
         {error, _Reason} ->
             ?LOG(error, "Failed to encode 'connected' presence: ~p", [Presence])
     end.
 
 on_client_disconnected(_ClientInfo = #{clientid := ClientId, username := Username},
                        Reason, _ConnInfo = #{disconnected_at := DisconnectedAt}, Env) ->
-    Presence = #{clientid => decode_client_id(ClientId),
+    Presence = #{clientid => ClientId,
                  username => Username,
                  reason => reason(Reason),
                  disconnected_at => DisconnectedAt,
@@ -75,7 +69,7 @@ on_client_disconnected(_ClientInfo = #{clientid := ClientId, username := Usernam
     case emqx_json:safe_encode(Presence) of
         {ok, Payload} ->
             emqx_broker:safe_publish(
-              make_msg(qos(Env), topic(disconnected, decode_client_id(ClientId)), Payload));
+              make_msg(qos(Env), topic(disconnected, ClientId), Payload));
         {error, _Reason} ->
             ?LOG(error, "Failed to encode 'disconnected' presence: ~p", [Presence])
     end.
@@ -96,7 +90,7 @@ connected_presence(#{peerhost := PeerHost,
                      connected_at := ConnectedAt,
                      expiry_interval := ExpiryInterval
                     }) ->
-    #{clientid => decode_client_id(ClientId),
+    #{clientid => ClientId,
       username => Username,
       ipaddress => ntoa(PeerHost),
       sockport => SockPort,
