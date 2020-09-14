@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -14,35 +14,16 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(emqx_time).
+-module(emqx_boot).
 
--export([ seed/0
-        , now_secs/0
-        , now_secs/1
-        , now_ms/0
-        , now_ms/1
-        ]).
+-export([is_enabled/1]).
 
--compile({inline,
-          [ seed/0
-          , now_secs/0
-          , now_secs/1
-          , now_ms/0
-          , now_ms/1
-          ]}).
+-define(BOOT_MODULES, [router, broker, listeners]).
 
-seed() ->
-    rand:seed(exsplus, erlang:timestamp()).
+-spec(is_enabled(all|list(router|broker|listeners)) -> boolean()).
+is_enabled(Mod) ->
+    (BootMods = boot_modules()) =:= all orelse lists:member(Mod, BootMods).
 
-now_secs() ->
-    erlang:system_time(second).
-
-now_secs({MegaSecs, Secs, _MicroSecs}) ->
-    MegaSecs * 1000000 + Secs.
-
-now_ms() ->
-    erlang:system_time(millisecond).
-
-now_ms({MegaSecs, Secs, MicroSecs}) ->
-    (MegaSecs * 1000000 + Secs) * 1000 + round(MicroSecs/1000).
+boot_modules() ->
+    application:get_env(emqx, boot_modules, ?BOOT_MODULES).
 

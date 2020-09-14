@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,16 +28,16 @@
         , stop_trace/1
         ]).
 
--type(trace_who() :: {client_id | topic, binary() | list()}).
+-type(trace_who() :: {clientid | topic, binary() | list()}).
 
 -define(TRACER, ?MODULE).
 -define(FORMAT, {emqx_logger_formatter,
                   #{template =>
                       [time," [",level,"] ",
-                       {client_id,
+                       {clientid,
                           [{peername,
-                              [client_id,"@",peername," "],
-                              [client_id, " "]}],
+                              [clientid,"@",peername," "],
+                              [clientid, " "]}],
                           [{peername,
                               [peername," "],
                               []}]},
@@ -45,7 +45,7 @@
 -define(TOPIC_TRACE_ID(T), "trace_topic_"++T).
 -define(CLIENT_TRACE_ID(C), "trace_clientid_"++C).
 -define(TOPIC_TRACE(T), {topic,T}).
--define(CLIENT_TRACE(C), {client_id,C}).
+-define(CLIENT_TRACE(C), {clientid,C}).
 
 -define(is_log_level(L),
         L =:= emergency orelse
@@ -65,9 +65,9 @@ trace(publish, #message{topic = <<"$SYS/", _/binary>>}) ->
     ignore;
 trace(publish, #message{from = From, topic = Topic, payload = Payload})
         when is_binary(From); is_atom(From) ->
-    emqx_logger:info(#{topic => Topic}, "PUBLISH to ~s: ~p", [Topic, Payload]).
+    emqx_logger:info(#{topic => Topic, mfa => {?MODULE, ?FUNCTION_NAME, ?FUNCTION_ARITY} }, "PUBLISH to ~s: ~0p", [Topic, Payload]).
 
-%% @doc Start to trace client_id or topic.
+%% @doc Start to trace clientid or topic.
 -spec(start_trace(trace_who(), logger:level(), string()) -> ok | {error, term()}).
 start_trace(Who, all, LogFile) ->
     start_trace(Who, debug, LogFile);
@@ -87,7 +87,7 @@ start_trace(Who, Level, LogFile) ->
         false -> {error, {invalid_log_level, Level}}
     end.
 
-%% @doc Stop tracing client_id or topic.
+%% @doc Stop tracing clientid or topic.
 -spec(stop_trace(trace_who()) -> ok | {error, term()}).
 stop_trace(Who) ->
     uninstall_trance_handler(Who).

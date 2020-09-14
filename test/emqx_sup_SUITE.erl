@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(emqx_oom_SUITE).
+-module(emqx_sup_SUITE).
 
 -compile(export_all).
 -compile(nowarn_export_all).
@@ -23,24 +23,17 @@
 
 all() -> emqx_ct:all(?MODULE).
 
-t_init(_) ->
-    ?assertEqual(undefined, emqx_oom:init(undefined)),
-    Opts = #{message_queue_len => 10,
-             max_heap_size => 1024*1024*8
-            },
-    Oom = emqx_oom:init(Opts),
-    ?assertEqual(#{message_queue_len => 10,
-                   max_heap_size => 1024*1024
-                  }, emqx_oom:info(Oom)).
+init_per_suite(Config) ->
+    emqx_ct_helpers:boot_modules(all),
+    emqx_ct_helpers:start_apps([]),
+    Config.
 
-t_check(_) ->
-    ?assertEqual(ok, emqx_oom:check(undefined)),
-    Opts = #{message_queue_len => 10,
-             max_heap_size => 1024*1024*8
-            },
-    Oom = emqx_oom:init(Opts),
-    [self() ! {msg, I} || I <- lists:seq(1, 5)],
-    ?assertEqual(ok, emqx_oom:check(Oom)),
-    [self() ! {msg, I} || I <- lists:seq(1, 6)],
-    ?assertEqual({shutdown, message_queue_too_long}, emqx_oom:check(Oom)).
+end_per_suite(_Config) ->
+    emqx_ct_helpers:stop_apps([]).
 
+t_child(_) ->
+    ?assertMatch({error, _}, emqx_sup:start_child(undef, worker)),
+    ?assertMatch({error, not_found}, emqx_sup:stop_child(undef)),
+    ?assertMatch({error, _}, emqx_sup:start_child(emqx_broker_sup, supervisor)),
+    ?assertEqual(ok, emqx_sup:stop_child(emqx_broker_sup)),
+    ?assertMatch({ok, _}, emqx_sup:start_child(emqx_broker_sup, supervisor)).

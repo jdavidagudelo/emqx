@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,10 +23,15 @@
         , name/1
         , filter/2
         , validate/1
+        , new/0
         ]).
 
 %% For tests
 -export([all/0]).
+
+-export([ set/3
+        , get/3
+        ]).
 
 -type(prop_name() :: atom()).
 -type(prop_id() :: pos_integer()).
@@ -176,6 +181,20 @@ validate_value('Binary-Data', Val) ->
     is_binary(Val);
 validate_value(_Type, _Val) -> false.
 
+-spec(new() -> map()).
+new() ->
+    #{}.
+
 -spec(all() -> map()).
 all() -> ?PROPS_TABLE.
+
+set(Name, Value, undefined) ->
+    #{Name => Value};
+set(Name, Value, Props) ->
+    Props#{Name => Value}.
+
+get(_Name, undefined, Default) ->
+    Default;
+get(Name, Props, Default) ->
+    maps:get(Name, Props, Default).
 

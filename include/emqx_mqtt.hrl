@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -178,8 +178,9 @@
 %% Maximum MQTT Packet ID and Length
 %%--------------------------------------------------------------------
 
--define(MAX_PACKET_ID, 16#ffff).
--define(MAX_PACKET_SIZE, 16#fffffff).
+-define(MAX_PACKET_ID, 16#FFFF).
+-define(MAX_PACKET_SIZE, 16#FFFFFFF).
+-define(MAX_TOPIC_AlIAS, 16#FFFF).
 
 %%--------------------------------------------------------------------
 %% MQTT Frame Mask
@@ -219,7 +220,7 @@
           will_retain  = false,
           keepalive    = 0,
           properties   = undefined,
-          client_id    = <<>>,
+          clientid     = <<>>,
           will_props   = undefined,
           will_topic   = undefined,
           will_payload = undefined,
@@ -317,6 +318,9 @@
 %%--------------------------------------------------------------------
 %% MQTT Packet Match
 %%--------------------------------------------------------------------
+
+-define(CONNECT_PACKET(),
+        #mqtt_packet{header = #mqtt_packet_header{type = ?CONNECT}}).
 
 -define(CONNECT_PACKET(Var),
     #mqtt_packet{header   = #mqtt_packet_header{type = ?CONNECT},

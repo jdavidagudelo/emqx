@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -44,6 +44,11 @@
         , handle_info/2
         , terminate/2
         ]).
+
+-ifdef(TEST).
+-compile(export_all).
+-compile(nowarn_export_all).
+-endif.
 
 -import(emqx_topic, [systop/1]).
 -import(emqx_misc, [start_timer/2]).
@@ -111,12 +116,12 @@ datetime() ->
 %% @doc Get sys interval
 -spec(sys_interval() -> pos_integer()).
 sys_interval() ->
-    emqx_config:get_env(broker_sys_interval, 60000).
+    emqx:get_env(broker_sys_interval, 60000).
 
 %% @doc Get sys heatbeat interval
 -spec(sys_heatbeat_interval() -> pos_integer()).
 sys_heatbeat_interval() ->
-    emqx_config:get_env(broker_sys_heartbeat, 30000).
+    emqx:get_env(broker_sys_heartbeat, 30000).
 
 %% @doc Get sys info
 -spec(info() -> list(tuple())).
@@ -192,7 +197,7 @@ uptime(hours, H) when H < 24 ->
 uptime(hours, H) ->
     [uptime(days, H div 24), integer_to_list(H rem 24), " hours, "];
 uptime(days, D) ->
-    [integer_to_list(D), " days,"].
+    [integer_to_list(D), " days, "].
 
 publish(uptime, Uptime) ->
     safe_publish(systop(uptime), Uptime);

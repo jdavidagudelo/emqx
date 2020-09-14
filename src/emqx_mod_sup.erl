@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -58,5 +58,6 @@ stop_child(ChildId) ->
 %%--------------------------------------------------------------------
 
 init([]) ->
+    ok = emqx_tables:new(emqx_modules, [set, public, {write_concurrency, true}]),
     {ok, {{one_for_one, 10, 100}, []}}.
 

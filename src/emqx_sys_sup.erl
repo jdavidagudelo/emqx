@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -48,6 +48,5 @@ child_spec(Mod, Args) ->
       modules => [Mod]
      }.
 
-config(Name) ->
-    emqx_config:get_env(Name, []).
+config(Name) -> emqx:get_env(Name, []).
 

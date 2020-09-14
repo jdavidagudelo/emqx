@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -14,12 +14,14 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(emqx_config_SUITE).
+-module(emqx_router_helper_SUITE).
 
 -compile(export_all).
 -compile(nowarn_export_all).
 
 -include_lib("eunit/include/eunit.hrl").
+
+-define(ROUTER_HELPER, emqx_router_helper).
 
 all() -> emqx_ct:all(?MODULE).
 
@@ -30,10 +32,19 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     emqx_ct_helpers:stop_apps([]).
 
-t_get_env(_) ->
-    ?assertEqual(undefined, emqx_config:get_env(undefined_key)),
-    ?assertEqual(default_value, emqx_config:get_env(undefined_key, default_value)),
-    application:set_env(emqx, undefined_key, hello),
-    ?assertEqual(hello, emqx_config:get_env(undefined_key)),
-    ?assertEqual(hello, emqx_config:get_env(undefined_key, default_value)),
-    application:unset_env(emqx, undefined_key).
+t_monitor(_) ->
+    ok = emqx_router_helper:monitor({undefined, node()}),
+    emqx_router_helper:monitor(undefined).
+
+t_mnesia(_) ->
+    ?ROUTER_HELPER ! {mnesia_table_event, {delete, {emqx_routing_node, node()}, undefined}},
+    ?ROUTER_HELPER ! {mnesia_table_event, testing},
+    ?ROUTER_HELPER ! {mnesia_table_event, {write, {emqx_routing_node, node()}, undefined}},
+    ?ROUTER_HELPER ! {membership, testing},
+    ?ROUTER_HELPER ! {membership, {mnesia, down, node()}},
+    ct:sleep(200).
+
+t_message(_) ->
+    ?ROUTER_HELPER ! testing,
+    gen_server:cast(?ROUTER_HELPER, testing),
+    gen_server:call(?ROUTER_HELPER, testing).

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -105,7 +105,7 @@ init(_) ->
     {ok, []}.
 
 handle_event({set_alarm, {AlarmId, AlarmDesc = #alarm{timestamp = undefined}}}, State) ->
-    handle_event({set_alarm, {AlarmId, AlarmDesc#alarm{timestamp = os:timestamp()}}}, State);
+    handle_event({set_alarm, {AlarmId, AlarmDesc#alarm{timestamp = erlang:system_time(millisecond)}}}, State);
 handle_event({set_alarm, Alarm = {AlarmId, AlarmDesc}}, State) ->
     ?LOG(warning, "New Alarm: ~p, Alarm Info: ~p", [AlarmId, AlarmDesc]),
     case encode_alarm(Alarm) of
@@ -154,16 +154,21 @@ encode_alarm({AlarmId, #alarm{severity  = Severity,
                               title     = Title,
                               summary   = Summary,
                               timestamp = Ts}}) ->
-    emqx_json:safe_encode([{id, maybe_to_binary(AlarmId)},
-                           {desc, [{severity, Severity},
-                                   {title, iolist_to_binary(Title)},
-                                   {summary, iolist_to_binary(Summary)},
-                                   {timestamp, emqx_time:now_ms(Ts)}]}]);
+    Descr = #{severity => Severity,
+              title => iolist_to_binary(Title),
+              summary => iolist_to_binary(Summary),
+              timestamp => Ts
+             },
+    emqx_json:safe_encode(#{id => maybe_to_binary(AlarmId),
+                            desc => Descr
+                           });
+
 encode_alarm({AlarmId, undefined}) ->
-    emqx_json:safe_encode([{id, maybe_to_binary(AlarmId)}]);
+    emqx_json:safe_encode(#{id => maybe_to_binary(AlarmId)});
 encode_alarm({AlarmId, AlarmDesc}) ->
-    emqx_json:safe_encode([{id, maybe_to_binary(AlarmId)},
-                           {desc, maybe_to_binary(AlarmDesc)}]).
+    emqx_json:safe_encode(#{id => maybe_to_binary(AlarmId),
+                            desc => maybe_to_binary(AlarmDesc)
+                           }).
 
 alarm_msg(Topic, Payload) ->
     Msg = emqx_message:make(?MODULE, Topic, Payload),
@@ -194,5 +199,5 @@ clear_alarm_(Id) ->
 set_alarm_history(Id, Desc) ->
     His = #alarm_history{id = Id,
                          desc = Desc,
-                         clear_at = os:timestamp()},
+                         clear_at = erlang:system_time(millisecond)},
     mnesia:dirty_write(?ALARM_HISTORY_TAB, His).

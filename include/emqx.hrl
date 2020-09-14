@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -64,14 +64,14 @@
           %% Message flags
           flags :: #{atom() => boolean()},
           %% Message headers, or MQTT 5.0 Properties
-          headers = #{},
+          headers :: map(),
           %% Topic that the message is published to
           topic :: binary(),
           %% Message Payload
           payload :: binary(),
-          %% Timestamp
-          timestamp :: erlang:timestamp()
-        }).
+          %% Timestamp (Unit: millisecond)
+          timestamp :: integer()
+         }).
 
 -record(delivery, {
           sender  :: pid(),      %% Sender of the delivery
@@ -128,7 +128,6 @@
 
 -record(plugin, {
           name           :: atom(),
-          version        :: string(),
           dir            :: string(),
           descr          :: string(),
           vendor         :: string(),
@@ -154,15 +153,13 @@
 %% Banned
 %%--------------------------------------------------------------------
 
--type(banned_who() ::  {client_id,  binary()}
-                     | {username,   binary()}
-                     | {ip_address, inet:ip_address()}).
-
 -record(banned, {
-          who    :: banned_who(),
-          reason :: binary(),
+          who    :: {clientid,  binary()}
+                  | {username,   binary()}
+                  | {ip_address, inet:ip_address()},
           by     :: binary(),
-          desc   :: binary(),
+          reason :: binary(),
+          at     :: integer(),
           until  :: integer()
         }).
 

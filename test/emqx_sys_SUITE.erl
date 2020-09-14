@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -42,6 +42,30 @@ end_per_suite(_Config) ->
     application:unload(emqx),
     ok = emqx_logger:set_log_level(error),
     ok.
+    
+% t_version(_) ->
+%     error('TODO').
+
+% t_sysdescr(_) ->
+%     error('TODO').
+
+t_uptime(_) ->
+    ?assertEqual(<<"1 seconds">>, iolist_to_binary(emqx_sys:uptime(seconds, 1))),
+    ?assertEqual(<<"1 minutes, 0 seconds">>, iolist_to_binary(emqx_sys:uptime(seconds, 60))),
+    ?assertEqual(<<"1 hours, 0 minutes, 0 seconds">>, iolist_to_binary(emqx_sys:uptime(seconds, 3600))),
+    ?assertEqual(<<"1 days, 0 hours, 0 minutes, 0 seconds">>, iolist_to_binary(emqx_sys:uptime(seconds, 86400))).
+
+% t_datetime(_) ->
+%     error('TODO').
+
+% t_sys_interval(_) ->
+%     error('TODO').
+
+% t_sys_heatbeat_interval(_) ->
+%     error('TODO').
+
+% t_info(_) ->
+%     error('TODO').
 
 t_prop_sys(_) ->
     Opts = [{numtests, 100}, {to_file, user}],

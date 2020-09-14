@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,63 +19,65 @@
 -compile(export_all).
 -compile(nowarn_export_all).
 
--import(emqx_mod_rewrite,
-        [ rewrite_subscribe/4
-        , rewrite_unsubscribe/4
-        , rewrite_publish/2
-        ]).
-
--include_lib("emqx.hrl").
+-include("emqx_mqtt.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(TEST_RULES, [<<"x/# ^x/y/(.+)$ z/y/$1">>,
-                     <<"y/+/z/# ^y/(.+)/z/(.+)$ y/z/$2">>
-                    ]).
+-define(RULES, [{rewrite,<<"x/#">>,<<"^x/y/(.+)$">>,<<"z/y/$1">>},
+                {rewrite,<<"y/+/z/#">>,<<"^y/(.+)/z/(.+)$">>,<<"y/z/$2">>}
+               ]).
 
 all() -> emqx_ct:all(?MODULE).
 
+init_per_suite(Config) ->
+    emqx_ct_helpers:boot_modules(all),
+    emqx_ct_helpers:start_apps([]),
+    %% Ensure all the modules unloaded.
+    ok = emqx_modules:unload(),
+    Config.
+
+end_per_suite(_Config) ->
+    emqx_ct_helpers:stop_apps([]).
+
+%% Test case for emqx_mod_write
+t_mod_rewrite(_Config) ->
+    ok = emqx_mod_rewrite:load(?RULES),
+    {ok, C} = emqtt:start_link([{clientid, <<"rewrite_client">>}]),
+    {ok, _} = emqtt:connect(C),
+    OrigTopics = [<<"x/y/2">>, <<"x/1/2">>, <<"y/a/z/b">>, <<"y/def">>],
+    DestTopics = [<<"z/y/2">>, <<"x/1/2">>, <<"y/z/b">>, <<"y/def">>],
+    %% Subscribe
+    {ok, _Props, _} = emqtt:subscribe(C, [{Topic, ?QOS_1} || Topic <- OrigTopics]),
+    timer:sleep(100),
+    Subscriptions = emqx_broker:subscriptions(<<"rewrite_client">>),
+    ?assertEqual(DestTopics, [Topic || {Topic, _SubOpts} <- Subscriptions]),
+    %% Publish
+    RecvTopics = [begin
+                      ok = emqtt:publish(C, Topic, <<"payload">>),
+                      {ok, #{topic := RecvTopic}} = receive_publish(100),
+                      RecvTopic
+                  end || Topic <- OrigTopics],
+    ?assertEqual(DestTopics, RecvTopics),
+    %% Unsubscribe
+    {ok, _, _} = emqtt:unsubscribe(C, OrigTopics),
+    timer:sleep(100),
+    ?assertEqual([], emqx_broker:subscriptions(<<"rewrite_client">>)),
+    ok = emqtt:disconnect(C),
+    ok = emqx_mod_rewrite:unload(?RULES).
+
+t_rewrite_rule(_Config) ->
+    Rules = emqx_mod_rewrite:compile(?RULES),
+    ?assertEqual(<<"z/y/2">>, emqx_mod_rewrite:match_and_rewrite(<<"x/y/2">>, Rules)),
+    ?assertEqual(<<"x/1/2">>, emqx_mod_rewrite:match_and_rewrite(<<"x/1/2">>, Rules)),
+    ?assertEqual(<<"y/z/b">>, emqx_mod_rewrite:match_and_rewrite(<<"y/a/z/b">>, Rules)),
+    ?assertEqual(<<"y/def">>, emqx_mod_rewrite:match_and_rewrite(<<"y/def">>, Rules)).
+
 %%--------------------------------------------------------------------
-%% Test cases
+%% Internal functions
 %%--------------------------------------------------------------------
 
-t_rewrite_subscribe(_) ->
-    ?assertEqual({ok, [{<<"test">>, #{}}]},
-                 rewrite(subscribe, [{<<"test">>, #{}}])),
-    ?assertEqual({ok, [{<<"z/y/test">>, #{}}]},
-                 rewrite(subscribe, [{<<"x/y/test">>, #{}}])),
-    ?assertEqual({ok, [{<<"y/z/test_topic">>, #{}}]},
-                 rewrite(subscribe, [{<<"y/test/z/test_topic">>, #{}}])).
-
-t_rewrite_unsubscribe(_) ->
-    ?assertEqual({ok, [{<<"test">>, #{}}]},
-                 rewrite(unsubscribe, [{<<"test">>, #{}}])),
-    ?assertEqual({ok, [{<<"z/y/test">>, #{}}]},
-                 rewrite(unsubscribe, [{<<"x/y/test">>, #{}}])),
-    ?assertEqual({ok, [{<<"y/z/test_topic">>, #{}}]},
-                 rewrite(unsubscribe, [{<<"y/test/z/test_topic">>, #{}}])).
-
-t_rewrite_publish(_) ->
-    ?assertMatch({ok, #message{topic = <<"test">>}},
-                 rewrite(publish, #message{topic = <<"test">>})),
-    ?assertMatch({ok, #message{topic = <<"z/y/test">>}},
-                 rewrite(publish, #message{topic = <<"x/y/test">>})),
-    ?assertMatch({ok, #message{topic = <<"y/z/test_topic">>}},
-                 rewrite(publish, #message{topic = <<"y/test/z/test_topic">>})).
-
-%%--------------------------------------------------------------------
-%% Helper functions
-%%--------------------------------------------------------------------
-
-rewrite(subscribe, TopicFilters) ->
-    rewrite_subscribe(#{}, #{}, TopicFilters, rules());
-rewrite(unsubscribe, TopicFilters) ->
-    rewrite_unsubscribe(#{}, #{}, TopicFilters, rules());
-rewrite(publish, Msg) -> rewrite_publish(Msg, rules()).
-
-rules() ->
-    [begin
-         [Topic, Re, Dest] = string:split(Rule, " ", all),
-         {ok, MP} = re:compile(Re),
-         {rewrite, Topic, MP, Dest}
-     end || Rule <- ?TEST_RULES].
-
+receive_publish(Timeout) ->
+    receive
+        {publish, Publish} -> {ok, Publish}
+    after
+        Timeout -> {error, timeout}
+    end.

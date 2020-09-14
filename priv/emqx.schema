@@ -1,5 +1,5 @@
 %%-*- mode: erlang -*-
-%% EMQ X R3.0 config mapping
+%% EMQ X R4.0 config mapping
 
 %%--------------------------------------------------------------------
 %% Cluster
@@ -205,8 +205,6 @@ end}.
   {default, "emqx@127.0.0.1"}
 ]}.
 
-
-
 %% @doc Specify SSL Options in the file if using SSL for erlang distribution
 {mapping, "node.ssl_dist_optfile", "vm_args.-ssl_dist_optfile", [
   {datatype, string},
@@ -237,7 +235,6 @@ end}.
 
 %% @doc More information at: http://erlang.org/doc/man/erl.html
 {mapping, "node.async_threads", "vm_args.+A", [
-  {default, 64},
   {datatype, integer},
   {validators, ["range:0-1024"]}
 ]}.
@@ -245,16 +242,12 @@ end}.
 %% @doc Erlang Process Limit
 {mapping, "node.process_limit", "vm_args.+P", [
   {datatype, integer},
-  {default, 256000},
   hidden
 ]}.
 
-%% Note: OTP R15 and earlier uses -env ERL_MAX_PORTS, R16+ uses +Q
-%% @doc The number of concurrent ports/sockets
+%% @doc The maximum number of concurrent ports/sockets.
 %% Valid range is 1024-134217727
-{mapping, "node.max_ports",
-  cuttlefish:otp("R16", "vm_args.+Q", "vm_args.-env ERL_MAX_PORTS"), [
-  {default, 262144},
+{mapping, "node.max_ports", "vm_args.+Q", [
   {datatype, integer},
   {validators, ["range4ports"]}
 ]}.
@@ -287,6 +280,11 @@ end}.
  end
 }.
 
+%% @doc Global GC Interval
+{mapping, "node.global_gc_interval", "emqx.global_gc_interval", [
+  {datatype, {duration, s}}
+]}.
+
 %% @doc http://www.erlang.org/doc/man/erlang.html#system_flag-2
 {mapping, "node.fullsweep_after", "vm_args.-env ERL_FULLSWEEP_AFTER", [
   {default, 1000},
@@ -317,7 +315,6 @@ end}.
 
 %% @doc http://www.erlang.org/doc/man/kernel_app.html#net_ticktime
 {mapping, "node.dist_net_ticktime", "vm_args.-kernel net_ticktime", [
-  {commented, 60},
   {datatype, integer},
   hidden
 ]}.
@@ -365,10 +362,17 @@ end}.
 
 %% Default TCP port for outgoing connections
 {mapping, "rpc.tcp_client_num", "gen_rpc.tcp_client_num", [
-  {default, 32},
+  {default, 0},
   {datatype, integer},
   {validators, ["range:gt_0_lt_256"]}
 ]}.
+
+{translation, "gen_rpc.tcp_client_num", fun(Conf) ->
+  case cuttlefish:conf_get("rpc.tcp_client_num", Conf) of
+    0 -> max(1, erlang:system_info(schedulers) div 2);
+    V -> V
+  end
+end}.
 
 %% Client connect timeout
 {mapping, "rpc.connect_timeout", "gen_rpc.connect_timeout", [
@@ -431,7 +435,7 @@ end}.
 ]}.
 
 {validator, "range:gt_0_lt_256", "must greater than 0 and less than 256",
-  fun(X) -> X > 0 andalso X < 256 end
+  fun(X) -> X >= 0 andalso X < 256 end
 }.
 
 %%--------------------------------------------------------------------
@@ -473,9 +477,19 @@ end}.
   {datatype, integer}
 ]}.
 
+{mapping, "log.rotation", "kernel.logger", [
+  {default, on},
+  {datatype, flag}
+]}.
+
 {mapping, "log.rotation.size", "kernel.logger", [
   {default, "10MB"},
   {datatype, bytesize}
+]}.
+
+{mapping, "log.size", "kernel.logger", [
+  {default, infinity},
+  {datatype, [bytesize, atom]}
 ]}.
 
 {mapping, "log.rotation.count", "kernel.logger", [
@@ -485,6 +499,46 @@ end}.
 
 {mapping, "log.$level.file", "kernel.logger", [
   {datatype, file}
+]}.
+
+{mapping, "log.sync_mode_qlen", "kernel.logger", [
+  {default, 100},
+  {datatype, integer}
+]}.
+
+{mapping, "log.drop_mode_qlen", "kernel.logger", [
+  {default, 3000},
+  {datatype, integer}
+]}.
+
+{mapping, "log.flush_qlen", "kernel.logger", [
+  {default, 8000},
+  {datatype, integer}
+]}.
+
+{mapping, "log.overload_kill", "kernel.logger", [
+  {default, on},
+  {datatype, flag}
+]}.
+
+{mapping, "log.overload_kill_mem_size", "kernel.logger", [
+  {default, "30MB"},
+  {datatype, bytesize}
+]}.
+
+{mapping, "log.overload_kill_qlen", "kernel.logger", [
+  {default, 20000},
+  {datatype, integer}
+]}.
+
+{mapping, "log.overload_kill_restart_after", "kernel.logger", [
+  {default, "5s"},
+  {datatype, [{duration, ms}, atom]}
+]}.
+
+{mapping, "log.burst_limit", "kernel.logger", [
+  {default, "disabled"},
+  {datatype, string}
 ]}.
 
 {mapping, "log.sasl", "sasl.sasl_error_logger", [
@@ -517,6 +571,10 @@ end}.
 {translation, "kernel.logger", fun(Conf) ->
     LogTo = cuttlefish:conf_get("log.to", Conf),
     LogLevel = cuttlefish:conf_get("log.level", Conf),
+    LogType = case cuttlefish:conf_get("log.rotation", Conf) of
+                  true -> wrap;
+                  false -> halt
+              end,
     CharsLimit = case cuttlefish:conf_get("log.chars_limit", Conf) of
                      -1 -> unlimited;
                      V -> V
@@ -524,20 +582,46 @@ end}.
     Formatter = {emqx_logger_formatter,
                   #{template =>
                       [time," [",level,"] ",
-                       {client_id,
+                       {clientid,
                           [{peername,
-                              [client_id,"@",peername," "],
-                              [client_id, " "]}],
+                              [clientid,"@",peername," "],
+                              [clientid, " "]}],
                           [{peername,
                               [peername," "],
                               []}]},
                        msg,"\n"],
                     chars_limit => CharsLimit}},
+    {BustLimitOn, {MaxBurstCount, TimeWindow}} =
+        case string:tokens(cuttlefish:conf_get("log.burst_limit", Conf), ", ") of
+            ["disabled"] -> {false, {20000, 1000}};
+            [Count, Window] ->
+                {true, {list_to_integer(Count),
+                        case cuttlefish_duration:parse(Window, ms) of
+                          Secs when is_integer(Secs) -> Secs;
+                          {error, Reason1} -> error(Reason1)
+                        end}}
+        end,
     FileConf =  fun(Filename) ->
-                  #{type => wrap,
+                  BasicConf =
+                  #{type => LogType,
                     file => filename:join(cuttlefish:conf_get("log.dir", Conf), Filename),
                     max_no_files => cuttlefish:conf_get("log.rotation.count", Conf),
-                    max_no_bytes => cuttlefish:conf_get("log.rotation.size", Conf)}
+                    sync_mode_qlen => cuttlefish:conf_get("log.sync_mode_qlen", Conf),
+                    drop_mode_qlen => cuttlefish:conf_get("log.drop_mode_qlen", Conf),
+                    flush_qlen => cuttlefish:conf_get("log.flush_qlen", Conf),
+                    overload_kill_enable => cuttlefish:conf_get("log.overload_kill", Conf),
+                    overload_kill_qlen => cuttlefish:conf_get("log.overload_kill_qlen", Conf),
+                    overload_kill_mem_size => cuttlefish:conf_get("log.overload_kill_mem_size", Conf),
+                    overload_kill_restart_after => cuttlefish:conf_get("log.overload_kill_restart_after", Conf),
+                    burst_limit_enable => BustLimitOn,
+                    burst_limit_max_count => MaxBurstCount,
+                    burst_limit_window_time => TimeWindow
+                    },
+                  MaxNoBytes = case LogType of
+                    wrap -> cuttlefish:conf_get("log.rotation.size", Conf);
+                    halt -> cuttlefish:conf_get("log.size", Conf)
+                  end,
+                  BasicConf#{max_no_bytes => MaxNoBytes}
                 end,
 
     %% For the default logger that outputs to console
@@ -631,10 +715,26 @@ end}.
   {datatype, {enum, [ignore, disconnect]}}
 ]}.
 
-%% @doc time interval to clean flapping records
-{mapping, "flapping_clean_interval", "emqx.flapping_clean_interval", [
-  {datatype, {duration, ms}}
+%% @doc Flapping detect policy
+{mapping, "flapping_detect_policy", "emqx.flapping_detect_policy", [
+  {datatype, string},
+  {default, "30,1m,5m"}
 ]}.
+
+{translation, "emqx.flapping_detect_policy", fun(Conf) ->
+    Policy = cuttlefish:conf_get("flapping_detect_policy", Conf),
+    [Threshold, Duration, Interval] = string:tokens(Policy, ", "),
+    ParseDuration = fun(S, Dur) ->
+                        case cuttlefish_duration:parse(S, Dur) of
+                            I when is_integer(I) -> I;
+                            {error, Reason} -> error(Reason)
+                        end
+                    end,
+    #{threshold => list_to_integer(Threshold),
+      duration  => ParseDuration(Duration, ms),
+      banned_interval => ParseDuration(Interval, s)
+     }
+end}.
 
 {validator, "range:gt_0", "must greater than 0",
   fun(X) -> X > 0 end
@@ -669,10 +769,10 @@ end}.
   {validators, ["range:0-2"]}
 ]}.
 
-%% @doc Set the Maximum topic alias.
+%% @doc Set the Maximum Topic Alias.
 {mapping, "mqtt.max_topic_alias", "emqx.max_topic_alias", [
- {default, 0},
- {datatype, integer}
+  {default, 65535},
+  {datatype, integer}
 ]}.
 
 %% @doc Whether the server supports MQTT retained messages.
@@ -696,6 +796,12 @@ end}.
 %% @doc Whether to ignore loop delivery of messages.(for mqtt v3.1.1)
 {mapping, "mqtt.ignore_loop_deliver", "emqx.ignore_loop_deliver", [
   {default, true},
+  {datatype, {enum, [true, false]}}
+]}.
+
+%% @doc Whether to parse the MQTT frame in strict mode
+{mapping, "mqtt.strict_mode", "emqx.strict_mode", [
+  {default, false},
   {datatype, {enum, [true, false]}}
 ]}.
 
@@ -819,8 +925,8 @@ end}.
 
 %% @doc Retry interval for redelivering QoS1/2 messages.
 {mapping, "zone.$name.retry_interval", "emqx.zones", [
-  {default, "20s"},
-  {datatype, {duration, ms}}
+  {default, "30s"},
+  {datatype, {duration, s}}
 ]}.
 
 %% @doc Max Packets that Awaiting PUBREL, 0 means no limit
@@ -832,7 +938,7 @@ end}.
 %% @doc Awaiting PUBREL timeout
 {mapping, "zone.$name.await_rel_timeout", "emqx.zones", [
   {default, "300s"},
-  {datatype, {duration, ms}}
+  {datatype, {duration, s}}
 ]}.
 
 %% @doc Ignore loop delivery of messages
@@ -877,22 +983,14 @@ end}.
 ]}.
 
 {mapping, "zone.$name.enable_flapping_detect", "emqx.zones", [
-  {datatype, flag}
-]}.
-
-{mapping, "zone.$name.flapping_threshold", "emqx.zones", [
-  {datatype, string}
-]}.
-
-{mapping, "zone.$name.flapping_banned_expiry_interval", "emqx.zones", [
-  {datatype, {duration, s}}
+  {datatype, flag},
+  {default, off}
 ]}.
 
 %% @doc Force connection/session process GC after this number of
 %% messages | bytes passed through.
 %% Numbers delimited by `|'. Zero or negative is to disable.
 {mapping, "zone.$name.force_gc_policy", "emqx.zones", [
-   {default, "0 | 0MB"},
    {datatype, string}
  ]}.
 
@@ -902,7 +1000,6 @@ end}.
 %% of queued MQTT messages of QoS 1 and 2.
 %% Zero or negative is to disable.
 {mapping, "zone.$name.force_shutdown_policy", "emqx.zones", [
-  {default, "default"},
   {datatype, string}
 ]}.
 
@@ -916,31 +1013,28 @@ end}.
   {datatype, {enum, [true, false]}}
 ]}.
 
+%% @doc Whether to parse the MQTT frame in strict mode
+{mapping, "zone.$name.strict_mode", "emqx.zones", [
+  {default, false},
+  {datatype, {enum, [true, false]}}
+]}.
+
+%% @doc Whether to bypass the authentication step
+{mapping, "zone.$name.bypass_auth_plugins", "emqx.zones", [
+  {default, false},
+  {datatype, {enum, [true, false]}}
+]}.
+
 {translation, "emqx.zones", fun(Conf) ->
-  Mapping = fun("retain_available", Val) ->
-                    {retain_available, Val};
-               ("flapping_threshold", Val) ->
-                    [Limit, Duration] = string:tokens(Val, ", "),
-                    FlappingThreshold = case cuttlefish_duration:parse(Duration, s) of
-                                            Min when is_integer(Min) ->
-                                                {list_to_integer(Limit), Min};
-                                           {error, Reason} ->
-                                                error(Reason)
-                                        end,
-                    {flapping_threshold, FlappingThreshold};
-               ("wildcard_subscription", Val) ->
-                    {wildcard_subscription, Val};
-               ("shared_subscription", Val) ->
-                    {shared_subscription, Val};
-               ("publish_limit", Val) ->
-                    [Limit, Duration] = string:tokens(Val, ", "),
-                    PubLimit = case cuttlefish_duration:parse(Duration, s) of
-                                   Secs when is_integer(Secs) ->
-                                       {list_to_integer(Limit) / Secs, list_to_integer(Limit)};
-                                   {error, Reason} ->
-                                       error(Reason)
+  Mapping = fun("publish_limit", Val) ->
+                    [L, D] = string:tokens(Val, ", "),
+                    Limit = list_to_integer(L),
+                    Duration = case cuttlefish_duration:parse(D, s) of
+                                   Secs when is_integer(Secs) -> Secs;
+                                   {error, Reason} -> error(Reason)
                                end,
-                    {publish_limit, PubLimit};
+                    Rate = Limit / Duration,
+                    {publish_limit, {Rate, Limit}};
                ("force_gc_policy", Val) ->
                     [Count, Bytes] = string:tokens(Val, "| "),
                     GcPolicy = case cuttlefish_bytesize:parse(Bytes) of
@@ -951,19 +1045,9 @@ end}.
                                          count => list_to_integer(Count)}
                                end,
                     {force_gc_policy, GcPolicy};
-               ("force_shutdown_policy", "default") ->
-                    {DefaultLen, DefaultSize} =
-                        case erlang:system_info(wordsize) of
-                            8 -> % arch_64
-                              {8000, cuttlefish_bytesize:parse("800MB")};
-                            4 -> % arch_32
-                              {1000, cuttlefish_bytesize:parse("100MB")}
-                        end,
-                    {force_shutdown_policy, #{message_queue_len => DefaultLen,
-                                              max_heap_size => DefaultSize}};
                ("force_shutdown_policy", Val) ->
                     [Len, Siz] = string:tokens(Val, "| "),
-                    MaxSiz = case erlang:system_info(wordsize) of
+                    MaxSiz = case WordSize = erlang:system_info(wordsize) of
                                 8 -> % arch_64
                                   (1 bsl 59) - 1;
                                 4 -> % arch_32
@@ -977,7 +1061,7 @@ end}.
                               cuttlefish:invalid(io_lib:format("force_shutdown_policy: heap-size ~s is too large", [Siz]));
                           Siz1 ->
                               #{message_queue_len => list_to_integer(Len),
-                                max_heap_size => Siz1}
+                                max_heap_size => Siz1 div WordSize}
                       end,
                     {force_shutdown_policy, ShutdownPolicy};
                ("mqueue_priorities", Val) ->
@@ -993,8 +1077,8 @@ end}.
                                         end, #{}, string:tokens(Val, ",")),
                             {mqueue_priorities, MqueuePriorities}
                     end;
-               ("mountpoint", Val) ->
-                    {mountpoint, iolist_to_binary(Val)};
+               ("mountpoint", Val) ->	
+                   {mountpoint, iolist_to_binary(Val)};
                (Opt, Val) ->
                     {list_to_atom(Opt), Val}
             end,
@@ -1283,6 +1367,11 @@ end}.
   {datatype, integer}
 ]}.
 
+{mapping, "listener.ws.$name.active_n", "emqx.listeners", [
+  {default, 100},
+  {datatype, integer}
+]}.
+
 {mapping, "listener.ws.$name.zone", "emqx.listeners", [
   {datatype, string}
 ]}.
@@ -1299,16 +1388,6 @@ end}.
 {mapping, "listener.ws.$name.verify_protocol_header", "emqx.listeners", [
   {default, on},
   {datatype, flag}
-]}.
-
-{mapping, "listener.ws.$name.proxy_address_header", "emqx.listeners", [
-  {datatype, string},
-  hidden
-]}.
-
-{mapping, "listener.ws.$name.proxy_port_header", "emqx.listeners", [
-  {datatype, string},
-  hidden
 ]}.
 
 {mapping, "listener.ws.$name.proxy_protocol", "emqx.listeners", [
@@ -1436,6 +1515,11 @@ end}.
   {datatype, integer}
 ]}.
 
+{mapping, "listener.wss.$name.active_n", "emqx.listeners", [
+  {default, 100},
+  {datatype, integer}
+]}.
+
 {mapping, "listener.wss.$name.zone", "emqx.listeners", [
   {datatype, string}
 ]}.
@@ -1451,16 +1535,6 @@ end}.
 
 {mapping, "listener.wss.$name.access.$id", "emqx.listeners", [
   {datatype, string}
-]}.
-
-{mapping, "listener.wss.$name.proxy_address_header", "emqx.listeners", [
-  {datatype, string},
-  hidden
-]}.
-
-{mapping, "listener.wss.$name.proxy_port_header", "emqx.listeners", [
-  {datatype, string},
-  hidden
 ]}.
 
 {mapping, "listener.wss.$name.proxy_protocol", "emqx.listeners", [
@@ -1638,10 +1712,20 @@ end}.
                   end
               end,
 
-    Ratelimit = fun(undefined) ->
-                    undefined;
-                   (S) ->
-                    list_to_tuple([list_to_integer(Token) || Token <- string:tokens(S, ",")])
+    RateLimit = fun(undefined) ->
+                        undefined;
+                   (Val) ->
+                        [L, D] = string:tokens(Val, ", "),
+                        Limit = case cuttlefish_bytesize:parse(L) of
+                                    Sz when is_integer(Sz) -> Sz;
+                                    {error, Reason} -> error(Reason)
+                                end,
+                        Duration = case cuttlefish_duration:parse(D, s) of
+                                       Secs when is_integer(Secs) -> Secs;
+                                       {error, Reason1} -> error(Reason1)
+                                   end,
+                        Rate = Limit / Duration,
+                        {Rate, Limit}
                 end,
 
     LisOpts = fun(Prefix) ->
@@ -1652,16 +1736,14 @@ end}.
                           {active_n, cuttlefish:conf_get(Prefix ++ ".active_n", Conf, undefined)},
                           {tune_buffer, cuttlefish:conf_get(Prefix ++ ".tune_buffer", Conf, undefined)},
                           {zone, Atom(cuttlefish:conf_get(Prefix ++ ".zone", Conf, undefined))},
-                          {rate_limit, Ratelimit(cuttlefish:conf_get(Prefix ++ ".rate_limit", Conf, undefined))},
+                          {rate_limit, RateLimit(cuttlefish:conf_get(Prefix ++ ".rate_limit", Conf, undefined))},
                           {proxy_protocol, cuttlefish:conf_get(Prefix ++ ".proxy_protocol", Conf, undefined)},
                           {proxy_protocol_timeout, cuttlefish:conf_get(Prefix ++ ".proxy_protocol_timeout", Conf, undefined)},
                           {verify_protocol_header, cuttlefish:conf_get(Prefix ++ ".verify_protocol_header", Conf, undefined)},
                           {peer_cert_as_username, cuttlefish:conf_get(Prefix ++ ".peer_cert_as_username", Conf, undefined)},
-                          {proxy_port_header, cuttlefish:conf_get(Prefix ++ ".proxy_port_header", Conf, undefined)},
                           {compress, cuttlefish:conf_get(Prefix ++ ".compress", Conf, undefined)},
                           {idle_timeout, cuttlefish:conf_get(Prefix ++ ".idle_timeout", Conf, undefined)},
-                          {max_frame_size, cuttlefish:conf_get(Prefix ++ ".max_frame_size", Conf, undefined)},
-                          {proxy_address_header, cuttlefish:conf_get(Prefix ++ ".proxy_address_header", Conf, undefined)} | AccOpts(Prefix)])
+                          {max_frame_size, cuttlefish:conf_get(Prefix ++ ".max_frame_size", Conf, undefined)} | AccOpts(Prefix)])
               end,
     DeflateOpts = fun(Prefix) ->
                       Filter([{level, cuttlefish:conf_get(Prefix ++ ".deflate_opts.level", Conf, undefined)},
@@ -1764,20 +1846,14 @@ end}.
 %% Modules
 %%--------------------------------------------------------------------
 
-{mapping, "module.presence", "emqx.modules", [
-  {default, off},
-  {datatype, flag}
+{mapping, "modules.loaded_file", "emqx.modules_loaded_file", [
+  {datatype, string}
 ]}.
 
 {mapping, "module.presence.qos", "emqx.modules", [
   {default, 1},
   {datatype, integer},
   {validators, ["range:0-2"]}
-]}.
-
-{mapping, "module.subscription", "emqx.modules", [
-  {default, off},
-  {datatype, flag}
 ]}.
 
 {mapping, "module.subscription.$id.topic", "emqx.modules", [
@@ -1790,9 +1866,22 @@ end}.
   {validators, ["range:0-2"]}
 ]}.
 
-{mapping, "module.rewrite", "emqx.modules", [
-  {default, off},
-  {datatype, flag}
+{mapping, "module.subscription.$id.nl", "emqx.modules", [
+  {default, 0},
+  {datatype, integer},
+  {validators, ["range:0-1"]}
+]}.
+
+{mapping, "module.subscription.$id.rap", "emqx.modules", [
+  {default, 0},
+  {datatype, integer},
+  {validators, ["range:0-1"]}
+]}.
+
+{mapping, "module.subscription.$id.rh", "emqx.modules", [
+  {default, 0},
+  {datatype, integer},
+  {validators, ["range:0-2"]}
 ]}.
 
 {mapping, "module.rewrite.rule.$id", "emqx.modules", [
@@ -1802,10 +1891,12 @@ end}.
 {translation, "emqx.modules", fun(Conf) ->
   Subscriptions = fun() ->
       List = cuttlefish_variable:filter_by_prefix("module.subscription", Conf),
-      QosList = [Qos || {_, Qos} <- lists:sort([{I, Qos} || {[_,"subscription", I,"qos"], Qos} <- List])],
-      TopicList = [iolist_to_binary(Topic) || {_, Topic} <-
-        lists:sort([{I, Topic} || {[_,"subscription", I, "topic"], Topic} <- List])],
-      lists:zip(TopicList, QosList)
+      TopicList = [{N, Topic}|| {[_,"subscription",N,"topic"], Topic} <- List],
+      [{iolist_to_binary(T), #{ qos => cuttlefish:conf_get("module.subscription." ++ N ++ ".qos", Conf, 0),
+                                nl  => cuttlefish:conf_get("module.subscription." ++ N ++ ".nl", Conf, 0),
+                                rap => cuttlefish:conf_get("module.subscription." ++ N ++ ".rap", Conf, 0),
+                                rh  => cuttlefish:conf_get("module.subscription." ++ N ++ ".rh", Conf, 0)
+                                }} || {N, T} <- TopicList]
   end,
   Rewrites = fun() ->
       Rules = cuttlefish_variable:filter_by_prefix("module.rewrite.rule", Conf),
@@ -1815,18 +1906,12 @@ end}.
                 end, Rules)
   end,
   lists:append([
-    case cuttlefish:conf_get("module.presence", Conf) of %% Presence
-        true  -> [{emqx_mod_presence, [{qos, cuttlefish:conf_get("module.presence.qos", Conf, 1)}]}];
-        false -> []
-    end,
-    case cuttlefish:conf_get("module.subscription", Conf) of %% Subscription
-        true  -> [{emqx_mod_subscription, Subscriptions()}];
-        false -> []
-    end,
-    case cuttlefish:conf_get("module.rewrite", Conf) of %% Rewrite
-        true  -> [{emqx_mod_rewrite, Rewrites()}];
-        false -> []
-    end
+    [{emqx_mod_presence, [{qos, cuttlefish:conf_get("module.presence.qos", Conf, 1)}]}],
+    [{emqx_mod_subscription, Subscriptions()}],
+    [{emqx_mod_rewrite, Rewrites()}],
+    [{emqx_mod_topic_metrics, []}],
+    [{emqx_mod_delayed, []}],
+    [{emqx_mod_acl_internal, []}]
   ])
 end}.
 

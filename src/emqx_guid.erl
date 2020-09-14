@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -67,14 +67,7 @@ next(NPid, Seq) ->
 bin({Ts, NPid, Seq}) ->
     <<Ts:64, NPid:48, Seq:16>>.
 
-ts() ->
-    case erlang:function_exported(erlang, system_time, 1) of
-        true -> %% R18
-            erlang:system_time(micro_seconds);
-        false ->
-            {MegaSeconds, Seconds, MicroSeconds} = os:timestamp(),
-            (MegaSeconds * 1000000 + Seconds) * 1000000 + MicroSeconds
-    end.
+ts() -> erlang:system_time(micro_seconds).
 
 %% Copied from https://github.com/okeuday/uuid.git.
 npid() ->

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -166,7 +166,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 handle_partition_event({partition, {occurred, Node}}) ->
     alarm_handler:set_alarm({partitioned, Node});
-handle_partition_event({partition, {healed, Node}}) ->
+handle_partition_event({partition, {healed, _Node}}) ->
     alarm_handler:clear_alarm(partitioned).
 
 suppress(Key, SuccFun, State = #{events := Events}) ->
@@ -177,7 +177,7 @@ suppress(Key, SuccFun, State = #{events := Events}) ->
     end.
 
 procinfo(Pid) ->
-    case {emqx_vm:get_process_info(Pid), emqx_vm:get_process_gc(Pid)} of
+    case {emqx_vm:get_process_info(Pid), emqx_vm:get_process_gc_info(Pid)} of
         {undefined, _} -> undefined;
         {_, undefined} -> undefined;
         {Info, GcInfo} -> Info ++ GcInfo

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -127,11 +127,11 @@ dispatch(Group, Topic, Delivery = #delivery{message = Msg}, FailedSubs) ->
 
 -spec(strategy() -> random | round_robin | sticky | hash).
 strategy() ->
-    emqx_config:get_env(shared_subscription_strategy, round_robin).
+    emqx:get_env(shared_subscription_strategy, round_robin).
 
 -spec(ack_enabled() -> boolean()).
 ack_enabled() ->
-    emqx_config:get_env(shared_dispatch_ack_enabled, false).
+    emqx:get_env(shared_dispatch_ack_enabled, false).
 
 do_dispatch(SubPid, Topic, Msg, _Type) when SubPid =:= self() ->
     %% Deadlock otherwise

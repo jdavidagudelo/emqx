@@ -3,7 +3,7 @@
 REBAR_GIT_CLONE_OPTIONS += --depth 1
 export REBAR_GIT_CLONE_OPTIONS
 
-SUITES_FILES := $(shell find test -name '*_SUITE.erl')
+SUITES_FILES := $(shell find test -name '*_SUITE.erl' | sort)
 
 CT_SUITES := $(foreach value,$(SUITES_FILES),$(shell val=$$(basename $(value) .erl); echo $${val%_*}))
 
@@ -65,7 +65,7 @@ cover:
 
 .PHONY: coveralls
 coveralls:
-	@rebar3 coveralls send
+	@rebar3 as test coveralls send
 
 .PHONY: xref
 xref:
@@ -89,7 +89,7 @@ ct_setup:
 
 .PHONY: ct
 ct: ct_setup
-	@rebar3 ct -v --readable=false --name $(CT_NODE_NAME) --suite=$(shell echo $(foreach var,$(CT_SUITES),test/$(var)_SUITE) | tr ' ' ',')
+	@rebar3 ct -v --name $(CT_NODE_NAME) --suite=$(shell echo $(foreach var,$(CT_SUITES),test/$(var)_SUITE) | tr ' ' ',')
 
 ## Run one single CT with rebar3
 ## e.g. make ct-one-suite suite=emqx_bridge

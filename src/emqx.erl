@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -29,15 +29,17 @@
         , stop/0
         ]).
 
+-export([ get_env/1
+        , get_env/2
+        ]).
+
 %% PubSub API
 -export([ subscribe/1
         , subscribe/2
         , subscribe/3
+        , publish/1
+        , unsubscribe/1
         ]).
-
--export([publish/1]).
-
--export([unsubscribe/1]).
 
 %% PubSub management API
 -export([ topics/0
@@ -63,7 +65,7 @@
 
 -define(APP, ?MODULE).
 
--define(COPYRIGHT, "Copyright (c) 2019 EMQ Technologies Co., Ltd").
+-define(COPYRIGHT, "Copyright (c) 2020 EMQ Technologies Co., Ltd").
 
 -define(LICENSE_MESSAGE, "Licensed under the Apache License, Version 2.0").
 
@@ -100,6 +102,15 @@ is_running(Node) ->
         undefined            -> false;
         Pid when is_pid(Pid) -> true
     end.
+
+%% @doc Get environment
+-spec(get_env(Key :: atom()) -> maybe(term())).
+get_env(Key) ->
+    get_env(Key, undefined).
+
+-spec(get_env(Key :: atom(), Default :: term()) -> term()).
+get_env(Key, Default) ->
+    application:get_env(?APP, Key, Default).
 
 %%--------------------------------------------------------------------
 %% PubSub API

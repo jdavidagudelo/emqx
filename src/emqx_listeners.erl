@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -42,19 +42,18 @@
 %% @doc Start all listeners.
 -spec(start() -> ok).
 start() ->
-    lists:foreach(fun start_listener/1, emqx_config:get_env(listeners, [])).
+    lists:foreach(fun start_listener/1, emqx:get_env(listeners, [])).
 
--spec(start_listener(listener()) -> {ok, pid()} | {error, term()}).
+-spec(start_listener(listener()) -> ok).
 start_listener({Proto, ListenOn, Options}) ->
-    StartRet = start_listener(Proto, ListenOn, Options),
-    case StartRet of
+    case start_listener(Proto, ListenOn, Options) of
         {ok, _} -> io:format("Start mqtt:~s listener on ~s successfully.~n",
                              [Proto, format(ListenOn)]);
         {error, Reason} ->
-            io:format(standard_error, "Failed to start mqtt:~s listener on ~s - ~p~n!",
-                      [Proto, format(ListenOn), Reason])
-    end,
-    StartRet.
+            io:format(standard_error, "Failed to start mqtt:~s listener on ~s - ~0p~n!",
+                      [Proto, format(ListenOn), Reason]),
+            error(Reason)
+    end.
 
 %% Start MQTT/TCP listener
 -spec(start_listener(esockd:proto(), esockd:listen_on(), [esockd:option()])
@@ -82,7 +81,7 @@ start_mqtt_listener(Name, ListenOn, Options) ->
                 {emqx_connection, start_link, [Options -- SockOpts]}).
 
 start_http_listener(Start, Name, ListenOn, RanchOpts, ProtoOpts) ->
-    Start(Name, with_port(ListenOn, RanchOpts), ProtoOpts).
+    Start(ws_name(Name, ListenOn), with_port(ListenOn, RanchOpts), ProtoOpts).
 
 mqtt_path(Options) ->
     proplists:get_value(mqtt_path, Options, "/mqtt").
@@ -113,7 +112,7 @@ with_port({Addr, Port}, Opts = #{socket_opts := SocketOption}) ->
 %% @doc Restart all listeners
 -spec(restart() -> ok).
 restart() ->
-    lists:foreach(fun restart_listener/1, emqx_config:get_env(listeners, [])).
+    lists:foreach(fun restart_listener/1, emqx:get_env(listeners, [])).
 
 -spec(restart_listener(listener()) -> any()).
 restart_listener({Proto, ListenOn, Options}) ->
@@ -125,10 +124,10 @@ restart_listener(tcp, ListenOn, _Options) ->
 restart_listener(Proto, ListenOn, _Options) when Proto == ssl; Proto == tls ->
     esockd:reopen('mqtt:ssl', ListenOn);
 restart_listener(Proto, ListenOn, Options) when Proto == http; Proto == ws ->
-    cowboy:stop_listener('mqtt:ws'),
+    cowboy:stop_listener(ws_name('mqtt:ws', ListenOn)),
     start_listener(Proto, ListenOn, Options);
 restart_listener(Proto, ListenOn, Options) when Proto == https; Proto == wss ->
-    cowboy:stop_listener('mqtt:wss'),
+    cowboy:stop_listener(ws_name('mqtt:wss', ListenOn)),
     start_listener(Proto, ListenOn, Options);
 restart_listener(Proto, ListenOn, _Opts) ->
     esockd:reopen(Proto, ListenOn).
@@ -136,7 +135,7 @@ restart_listener(Proto, ListenOn, _Opts) ->
 %% @doc Stop all listeners.
 -spec(stop() -> ok).
 stop() ->
-    lists:foreach(fun stop_listener/1, emqx_config:get_env(listeners, [])).
+    lists:foreach(fun stop_listener/1, emqx:get_env(listeners, [])).
 
 -spec(stop_listener(listener()) -> ok | {error, term()}).
 stop_listener({Proto, ListenOn, Opts}) ->
@@ -156,10 +155,10 @@ stop_listener(tcp, ListenOn, _Opts) ->
     esockd:close('mqtt:tcp', ListenOn);
 stop_listener(Proto, ListenOn, _Opts) when Proto == ssl; Proto == tls ->
     esockd:close('mqtt:ssl', ListenOn);
-stop_listener(Proto, _ListenOn, _Opts) when Proto == http; Proto == ws ->
-    cowboy:stop_listener('mqtt:ws');
-stop_listener(Proto, _ListenOn, _Opts) when Proto == https; Proto == wss ->
-    cowboy:stop_listener('mqtt:wss');
+stop_listener(Proto, ListenOn, _Opts) when Proto == http; Proto == ws ->
+    cowboy:stop_listener(ws_name('mqtt:ws', ListenOn));
+stop_listener(Proto, ListenOn, _Opts) when Proto == https; Proto == wss ->
+    cowboy:stop_listener(ws_name('mqtt:wss', ListenOn));
 stop_listener(Proto, ListenOn, _Opts) ->
     esockd:close(Proto, ListenOn).
 
@@ -176,5 +175,9 @@ format(Port) when is_integer(Port) ->
 format({Addr, Port}) when is_list(Addr) ->
     io_lib:format("~s:~w", [Addr, Port]);
 format({Addr, Port}) when is_tuple(Addr) ->
-    io_lib:format("~s:~w", [esockd_net:ntoab(Addr), Port]).
+    io_lib:format("~s:~w", [inet:ntoa(Addr), Port]).
 
+ws_name(Name, {_Addr, Port}) ->
+    ws_name(Name, Port);
+ws_name(Name, Port) ->
+    list_to_atom(lists:concat([Name, ":", Port])).

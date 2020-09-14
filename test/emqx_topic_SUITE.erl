@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -229,4 +229,3 @@ bench(Case, Fun, Args) ->
                           ]),
     ct:pal("Time consumed by ~s: ~.3f(us)~nCall ~s per second: ~w",
            [Case, Time/?N, Case, (?N * 1000000) div Time]).
-
