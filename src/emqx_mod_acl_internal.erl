@@ -24,7 +24,9 @@
 -logger_header("[ACL_INTERNAL]").
 
 %% APIs
--export([check_acl/5]).
+-export([ check_acl/5
+        , rules_from_file/1
+        ]).
 
 %% emqx_gen_mod callbacks
 -export([ load/1
@@ -33,8 +35,6 @@
         , description/0
         ]).
 
--define(MFA(M, F, A), {M, F, A}).
-
 -type(acl_rules() :: #{publish   => [emqx_access_rule:rule()],
                        subscribe => [emqx_access_rule:rule()]}).
 
@@ -42,20 +42,19 @@
 %% API
 %%--------------------------------------------------------------------
 
-load(_Env) ->
-    Rules = rules_from_file(emqx:get_env(acl_file)),
-    emqx_hooks:add('client.check_acl', ?MFA(?MODULE, check_acl, [Rules]),  -1).
+load(Env) ->
+    Rules = rules_from_file(proplists:get_value(acl_file, Env)),
+    emqx_hooks:add('client.check_acl', {?MODULE, check_acl, [Rules]},  -1).
 
 unload(_Env) ->
-    Rules = rules_from_file(emqx:get_env(acl_file)),
-    emqx_hooks:del('client.check_acl', ?MFA(?MODULE, check_acl, [Rules])).
+    emqx_hooks:del('client.check_acl', {?MODULE, check_acl}).
 
-reload(_Env) ->
+reload(Env) ->
     emqx_acl_cache:is_enabled() andalso (
         lists:foreach(
             fun(Pid) -> erlang:send(Pid, clean_acl_cache) end,
         emqx_cm:all_channels())),
-    unload([]), load([]).
+    unload(Env), load(Env).
 
 description() ->
     "EMQ X Internal ACL Module".

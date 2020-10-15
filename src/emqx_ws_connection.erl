@@ -62,8 +62,10 @@
           sockstate :: emqx_types:sockstate(),
           %% Simulate the active_n opt
           active_n :: pos_integer(),
+          %% MQTT Piggyback
+          mqtt_piggyback :: single | multiple, 
           %% Limiter
-          limiter :: emqx_limiter:limiter(),
+          limiter :: maybe(emqx_limiter:limiter()),
           %% Limit Timer
           limit_timer :: maybe(reference()),
           %% Parse State
@@ -81,7 +83,7 @@
           %% Idle Timeout
           idle_timeout :: timeout(),
           %% Idle Timer
-          idle_timer :: reference()
+          idle_timer :: maybe(reference())
         }).
 
 -type(state() :: #state{}).
@@ -94,6 +96,9 @@
 -define(CONN_STATS, [recv_pkt, recv_msg, send_pkt, send_msg]).
 
 -define(ENABLED(X), (X =/= undefined)).
+
+-dialyzer({no_match, [info/2]}).
+-dialyzer({nowarn_function, [websocket_init/1]}).
 
 %%--------------------------------------------------------------------
 %% Info, Stats
@@ -219,8 +224,11 @@ websocket_init([Req, Opts]) ->
                 },
     Zone = proplists:get_value(zone, Opts),
     PubLimit = emqx_zone:publish_limit(Zone),
-    Limiter = emqx_limiter:init([{pub_limit, PubLimit}|Opts]),
+    BytesIn = proplists:get_value(rate_limit, Opts),
+    RateLimit = emqx_zone:ratelimit(Zone),
+    Limiter = emqx_limiter:init(Zone, PubLimit, BytesIn, RateLimit),
     ActiveN = proplists:get_value(active_n, Opts, ?ACTIVE_N),
+    MQTTPiggyback = proplists:get_value(mqtt_piggyback, Opts, multiple),
     FrameOpts = emqx_zone:mqtt_frame_options(Zone),
     ParseState = emqx_frame:initial_parse_state(FrameOpts),
     Serialize = emqx_frame:serialize_fun(),
@@ -232,19 +240,20 @@ websocket_init([Req, Opts]) ->
     IdleTimer = start_timer(IdleTimeout, idle_timeout),
     emqx_misc:tune_heap_size(emqx_zone:oom_policy(Zone)),
     emqx_logger:set_metadata_peername(esockd:format(Peername)),
-    {ok, #state{peername     = Peername,
-                sockname     = Sockname,
-                sockstate    = running,
-                active_n     = ActiveN,
-                limiter      = Limiter,
-                parse_state  = ParseState,
-                serialize    = Serialize,
-                channel      = Channel,
-                gc_state     = GcState,
-                postponed    = [],
-                stats_timer  = StatsTimer,
-                idle_timeout = IdleTimeout,
-                idle_timer   = IdleTimer
+    {ok, #state{peername       = Peername,
+                sockname       = Sockname,
+                sockstate      = running,
+                active_n       = ActiveN,
+                mqtt_piggyback = MQTTPiggyback,
+                limiter        = Limiter,
+                parse_state    = ParseState,
+                serialize      = Serialize,
+                channel        = Channel,
+                gc_state       = GcState,
+                postponed      = [],
+                stats_timer    = StatsTimer,
+                idle_timeout   = IdleTimeout,
+                idle_timer     = IdleTimer
                }, hibernate}.
 
 websocket_handle({binary, Data}, State) when is_list(Data) ->
@@ -344,6 +353,11 @@ handle_call(From, info, State) ->
 handle_call(From, stats, State) ->
     gen_server:reply(From, stats(State)),
     return(State);
+
+handle_call(_From, {ratelimit, Policy}, State = #state{channel = Channel}) ->
+    Zone = emqx_channel:info(zone, Channel),
+    Limiter = emqx_limiter:init(Zone, Policy),
+    {reply, ok, State#state{limiter = Limiter}};
 
 handle_call(From, Req, State = #state{channel = Channel}) ->
     case emqx_channel:handle_call(Req, Channel) of
@@ -509,7 +523,7 @@ with_channel(Fun, Args, State = #state{channel = Channel}) ->
 %% Handle outgoing packets
 %%--------------------------------------------------------------------
 
-handle_outgoing(Packets, State = #state{active_n = ActiveN}) ->
+handle_outgoing(Packets, State = #state{active_n = ActiveN, mqtt_piggyback = MQTTPiggyback}) ->
     IoData = lists:map(serialize_and_inc_stats_fun(State), Packets),
     Oct = iolist_size(IoData),
     ok = inc_sent_stats(length(Packets), Oct),
@@ -521,7 +535,12 @@ handle_outgoing(Packets, State = #state{active_n = ActiveN}) ->
                      postpone({check_gc, Stats}, State);
                  false -> State
              end,
-    {{binary, IoData}, ensure_stats_timer(NState)}.
+    
+    {case MQTTPiggyback of
+         single -> [{binary, IoData}];
+         multiple -> lists:map(fun(Bin) -> {binary, Bin} end, IoData)
+     end,
+     ensure_stats_timer(NState)}.
 
 serialize_and_inc_stats_fun(#state{serialize = Serialize}) ->
     fun(Packet) ->
@@ -632,8 +651,8 @@ return(State = #state{postponed = Postponed}) ->
         {[], []}   -> {ok, State1};
         {[], Cmds} -> {Cmds, State1};
         {Packets, Cmds} ->
-            {Frame, State2} = handle_outgoing(Packets, State1),
-            {[Frame|Cmds], State2}
+            {Frames, State2} = handle_outgoing(Packets, State1),
+            {Frames ++ Cmds, State2}
     end.
 
 classify([], Packets, Cmds, Events) ->
