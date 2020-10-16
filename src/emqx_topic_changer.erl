@@ -15,7 +15,7 @@
 %% API
 -export([set_topic/2]).
 
--spec(set_topic(emqx:topic(), emqx_types:message()) -> {emqx_types:message(), emqx:topic()}).
+-spec(set_topic(emqx:topic(), emqx_types:message()) -> emqx_types:message()).
 set_topic(Topic, Msg) ->
     NewTopic = re:replace(Topic, "/users/[^/]+","", [{return,list}]),
-    {Msg#message{topic = list_to_binary(NewTopic)}, list_to_binary(NewTopic)}.
+    Msg#message{topic = list_to_binary(NewTopic)}.

@@ -206,8 +206,8 @@ publish(Msg) when is_record(Msg, message) ->
             ?LOG(notice, "Stop publishing: ~s", [emqx_message:format(Msg)]),
             [];
         Msg1 = #message{topic = Topic} ->
-            {NewMessage, NewTopic} = emqx_topic_changer:set_topic(Topic, Msg1),
-            route(aggre(emqx_router:match_routes(NewTopic)), delivery(NewMessage))
+            NewMessage = emqx_topic_changer:set_topic(Topic, Msg1),
+            route(aggre(emqx_router:match_routes(Topic)), delivery(NewMessage))
     end.
 
 %% Called internally
