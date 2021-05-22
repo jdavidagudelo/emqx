@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -47,6 +47,8 @@
         , code_change/3
         ]).
 
+-elvis([{elvis_style, state_record_and_type, disable}]).
+
 -define(BANNED_TAB, ?MODULE).
 
 %%--------------------------------------------------------------------
@@ -62,7 +64,7 @@ mnesia(boot) ->
                 {storage_properties, [{ets, [{read_concurrency, true}]}]}]);
 
 mnesia(copy) ->
-    ok = ekka_mnesia:copy_table(?BANNED_TAB).
+    ok = ekka_mnesia:copy_table(?BANNED_TAB, disc_copies).
 
 %% @doc Start the banned server.
 -spec(start_link() -> startlink_ret()).

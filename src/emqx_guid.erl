@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -136,11 +136,11 @@ npid() ->
                     PidByte3:8, PidByte4:8>>,
     NPid.
 
-to_hexstr(<<I:128>>) ->
-    list_to_binary(integer_to_list(I, 16)).
+to_hexstr(I) when byte_size(I) =:= 16 ->
+    emqx_misc:bin2hexstr_A_F(I).
 
-from_hexstr(S) ->
-    I = list_to_integer(binary_to_list(S), 16), <<I:128>>.
+from_hexstr(S) when byte_size(S) =:= 32 ->
+    emqx_misc:hexstr2bin(S).
 
 to_base62(<<I:128>>) ->
     emqx_base62:encode(I).

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -106,11 +106,13 @@ with_ctl_server(Fun) ->
 
 mock_print() ->
     %% proxy usage/1,2 and print/1,2 to format_xx/1,2 funcs
+    catch meck:unload(emqx_ctl),
     meck:new(emqx_ctl, [non_strict, passthrough]),
     meck:expect(emqx_ctl, print, fun(Arg) -> emqx_ctl:format(Arg) end),
     meck:expect(emqx_ctl, print, fun(Msg, Arg) -> emqx_ctl:format(Msg, Arg) end),
     meck:expect(emqx_ctl, usage, fun(Usages) -> emqx_ctl:format_usage(Usages) end),
-    meck:expect(emqx_ctl, usage, fun(CmdParams, CmdDescr) -> emqx_ctl:format_usage(CmdParams, CmdDescr) end).
+    meck:expect(emqx_ctl, usage, fun(CmdParams, CmdDescr) ->
+                                         emqx_ctl:format_usage(CmdParams, CmdDescr) end).
 
 unmock_print() ->
     meck:unload(emqx_ctl).

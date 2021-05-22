@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -55,7 +55,7 @@ start_link(Opts) ->
 %%--------------------------------------------------------------------
 
 init([Opts]) ->
-    erlang:system_monitor(self(), parse_opt(Opts)),
+    _ = erlang:system_monitor(self(), parse_opt(Opts)),
     emqx_logger:set_proc_metadata(#{sysmon => true}),
 
     %% Monitor cluster partition event
@@ -174,7 +174,7 @@ suppress(Key, SuccFun, State = #{events := Events}) ->
         true ->
             {noreply, State};
         false ->
-            SuccFun(),
+            _ = SuccFun(),
             {noreply, State#{events := [Key|Events]}}
     end.
 

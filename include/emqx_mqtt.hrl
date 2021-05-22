@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -96,23 +96,6 @@
 -define(DISCONNECT,  14). %% Client or Server is disconnecting
 -define(AUTH,        15). %% Authentication exchange
 
--define(TYPE_NAMES, [
-        'CONNECT',
-        'CONNACK',
-        'PUBLISH',
-        'PUBACK',
-        'PUBREC',
-        'PUBREL',
-        'PUBCOMP',
-        'SUBSCRIBE',
-        'SUBACK',
-        'UNSUBSCRIBE',
-        'UNSUBACK',
-        'PINGREQ',
-        'PINGRESP',
-        'DISCONNECT',
-        'AUTH']).
-
 %%--------------------------------------------------------------------
 %% MQTT V3.1.1 Connect Return Codes
 %%--------------------------------------------------------------------
@@ -181,6 +164,7 @@
 -define(MAX_PACKET_ID, 16#FFFF).
 -define(MAX_PACKET_SIZE, 16#FFFFFFF).
 -define(MAX_TOPIC_AlIAS, 16#FFFF).
+-define(RECEIVE_MAXIMUM_LIMIT, ?MAX_PACKET_ID).
 
 %%--------------------------------------------------------------------
 %% MQTT Frame Mask
