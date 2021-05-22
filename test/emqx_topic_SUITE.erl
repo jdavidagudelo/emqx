@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -189,7 +189,7 @@ t_feed_var(_) ->
                  feed_var(<<"%c">>, <<"clientId">>, <<"username/test/client/%c">>)).
 
 long_topic() ->
-    iolist_to_binary([[integer_to_list(I), "/"] || I <- lists:seq(0, 10000)]).
+    iolist_to_binary([[integer_to_list(I), "/"] || I <- lists:seq(0, 66666)]).
 
 t_parse(_) ->
     ok = ?catch_error({invalid_topic_filter, <<"$queue/t">>},

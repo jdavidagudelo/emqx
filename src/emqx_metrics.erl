@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 
 -behavior(gen_server).
 
+-include("emqx.hrl").
 -include("logger.hrl").
 -include("types.hrl").
 -include("emqx_mqtt.hrl").
@@ -62,6 +63,10 @@
         , handle_info/2
         , terminate/2
         , code_change/3
+        ]).
+
+%% BACKW: v4.3.0
+-export([ upgrade_retained_delayed_counter_type/0
         ]).
 
 -export_type([metric_idx/0]).
@@ -144,8 +149,8 @@
          {counter, 'messages.dropped.expired'},  % QoS2 Messages expired
          {counter, 'messages.dropped.no_subscribers'},  % Messages dropped
          {counter, 'messages.forward'},       % Messages forward
-         {gauge,   'messages.retained'},      % Messages retained
-         {gauge,   'messages.delayed'},       % Messages delayed
+         {counter, 'messages.retained'},      % Messages retained
+         {counter, 'messages.delayed'},       % Messages delayed
          {counter, 'messages.delivered'},     % Messages delivered
          {counter, 'messages.acked'}          % Messages acked
         ]).
@@ -193,6 +198,11 @@ start_link() ->
 
 -spec(stop() -> ok).
 stop() -> gen_server:stop(?SERVER).
+
+%% BACKW: v4.3.0
+upgrade_retained_delayed_counter_type() ->
+    Ks = ['messages.retained', 'messages.delayed'],
+    gen_server:call(?SERVER, {set_type_to_counter, Ks}, infinity).
 
 %%--------------------------------------------------------------------
 %% Metrics API
@@ -448,6 +458,13 @@ handle_call({create, Type, Name}, _From, State = #state{next_idx = NextIdx}) ->
             true = ets:insert(?TAB, Metric),
             {reply, {ok, NextIdx}, State#state{next_idx = NextIdx + 1}}
     end;
+
+handle_call({set_type_to_counter, Keys}, _From, State) ->
+    lists:foreach(
+      fun(K) ->
+        ets:update_element(?TAB, K, {#metric.type, counter})
+      end, Keys),
+    {reply, ok, State};
 
 handle_call(Req, _From, State) ->
     ?LOG(error, "Unexpected call: ~p", [Req]),

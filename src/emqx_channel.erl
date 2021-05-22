@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -31,6 +31,9 @@
 
 -export([ info/1
         , info/2
+        , set_conn_state/2
+        , get_session/1
+        , set_session/2
         , stats/1
         , caps/1
         ]).
@@ -44,6 +47,9 @@
         , handle_info/2
         , terminate/2
         ]).
+
+%% Export for emqx_sn
+-export([do_deliver/2]).
 
 %% Exports for CT
 -export([set_field/3]).
@@ -87,7 +93,7 @@
           pendings :: list()
          }).
 
--opaque(channel() :: #channel{}).
+-type(channel() :: #channel{}).
 
 -type(conn_state() :: idle | connecting | connected | disconnected).
 
@@ -127,12 +133,26 @@ info(Keys, Channel) when is_list(Keys) ->
     [{Key, info(Key, Channel)} || Key <- Keys];
 info(conninfo, #channel{conninfo = ConnInfo}) ->
     ConnInfo;
-info(zone, #channel{clientinfo = #{zone := Zone}}) ->
-    Zone;
-info(clientid, #channel{clientinfo = #{clientid := ClientId}}) ->
-    ClientId;
+info(socktype, #channel{conninfo = ConnInfo}) ->
+    maps:get(socktype, ConnInfo, undefined);
+info(peername, #channel{conninfo = ConnInfo}) ->
+    maps:get(peername, ConnInfo, undefined);
+info(sockname, #channel{conninfo = ConnInfo}) ->
+    maps:get(sockname, ConnInfo, undefined);
+info(proto_name, #channel{conninfo = ConnInfo}) ->
+    maps:get(proto_name, ConnInfo, undefined);
+info(proto_ver, #channel{conninfo = ConnInfo}) ->
+    maps:get(proto_ver, ConnInfo, undefined);
+info(connected_at, #channel{conninfo = ConnInfo}) ->
+    maps:get(connected_at, ConnInfo, undefined);
 info(clientinfo, #channel{clientinfo = ClientInfo}) ->
     ClientInfo;
+info(zone, #channel{clientinfo = ClientInfo}) ->
+    maps:get(zone, ClientInfo, undefined);
+info(clientid, #channel{clientinfo = ClientInfo}) ->
+    maps:get(clientid, ClientInfo, undefined);
+info(username, #channel{clientinfo = ClientInfo}) ->
+    maps:get(username, ClientInfo, undefined);
 info(session, #channel{session = Session}) ->
     maybe_apply(fun emqx_session:info/1, Session);
 info(conn_state, #channel{conn_state = ConnState}) ->
@@ -148,6 +168,15 @@ info(topic_aliases, #channel{topic_aliases = Aliases}) ->
 info(alias_maximum, #channel{alias_maximum = Limits}) ->
     Limits;
 info(timers, #channel{timers = Timers}) -> Timers.
+
+set_conn_state(ConnState, Channel) ->
+    Channel#channel{conn_state = ConnState}.
+
+get_session(#channel{session = Session}) ->
+    Session.
+
+set_session(Session, Channel) ->
+    Channel#channel{session = Session}.
 
 %% TODO: Add more stats.
 -spec(stats(channel()) -> emqx_types:stats()).
@@ -206,13 +235,22 @@ setting_peercert_infos(NoSSL, ClientInfo, _Options)
 setting_peercert_infos(Peercert, ClientInfo, Options) ->
     {DN, CN} = {esockd_peercert:subject(Peercert),
                 esockd_peercert:common_name(Peercert)},
-    Username = case proplists:get_value(peer_cert_as_username, Options) of
-                   cn  -> CN;
-                   dn  -> DN;
-                   crt -> Peercert;
-                   _   -> undefined
-               end,
-    ClientInfo#{username => Username, dn => DN, cn => CN}.
+    Username = peer_cert_as(peer_cert_as_username, Options, Peercert, DN, CN),
+    ClientId = peer_cert_as(peer_cert_as_clientid, Options, Peercert, DN, CN),
+    ClientInfo#{username => Username, clientid => ClientId, dn => DN, cn => CN}.
+
+-dialyzer([{nowarn_function, [peer_cert_as/5]}]).
+% esockd_peercert:peercert is opaque
+% https://github.com/emqx/esockd/blob/master/src/esockd_peercert.erl
+peer_cert_as(Key, Options, Peercert, DN, CN) ->
+    case proplists:get_value(Key, Options) of
+         cn  -> CN;
+         dn  -> DN;
+         crt -> Peercert;
+         pem -> base64:encode(Peercert);
+         md5 -> emqx_passwd:hash(md5, Peercert);
+         _   -> undefined
+     end.
 
 take_ws_cookie(ClientInfo, ConnInfo) ->
     case maps:take(ws_cookie, ConnInfo) of
@@ -260,7 +298,8 @@ handle_in(?CONNECT_PACKET(ConnPkt), Channel) ->
             handle_out(connack, ReasonCode, NChannel)
     end;
 
-handle_in(Packet = ?AUTH_PACKET(?RC_CONTINUE_AUTHENTICATION, _Properties), Channel = #channel{conn_state = ConnState}) ->
+handle_in(Packet = ?AUTH_PACKET(?RC_CONTINUE_AUTHENTICATION, _Properties),
+          Channel = #channel{conn_state = ConnState}) ->
     case enhanced_auth(Packet, Channel) of
         {ok, NProperties, NChannel} ->
             case ConnState of
@@ -277,7 +316,8 @@ handle_in(Packet = ?AUTH_PACKET(?RC_CONTINUE_AUTHENTICATION, _Properties), Chann
             handle_out(connack, NReasonCode, NChannel)
     end;
 
-handle_in(Packet = ?AUTH_PACKET(?RC_RE_AUTHENTICATE, _Properties), Channel = #channel{conn_state = connected}) ->
+handle_in(Packet = ?AUTH_PACKET(?RC_RE_AUTHENTICATE, _Properties),
+          Channel = #channel{conn_state = connected}) ->
     case enhanced_auth(Packet, Channel) of
         {ok, NProperties, NChannel} ->
             handle_out(auth, {?RC_SUCCESS, NProperties}, NChannel);
@@ -362,22 +402,33 @@ handle_in(?PUBCOMP_PACKET(PacketId, _ReasonCode), Channel = #channel{session = S
 handle_in(Packet = ?SUBSCRIBE_PACKET(PacketId, Properties, TopicFilters),
           Channel = #channel{clientinfo = ClientInfo = #{zone := Zone}}) ->
     case emqx_packet:check(Packet) of
-        ok -> TopicFilters1 = parse_topic_filters(TopicFilters),
-              TopicFilters2 = put_subid_in_subopts(Properties, TopicFilters1),
-              TopicFilters3 = run_hooks('client.subscribe',
-                                        [ClientInfo, Properties],
-                                        TopicFilters2
-                                       ),
-              {ReasonCodes, NChannel} = process_subscribe(TopicFilters3, Properties, Channel),
-              case emqx_zone:get_env(Zone, acl_deny_action, ignore) =:= disconnect andalso
-                   lists:any(fun(ReasonCode) ->
-                                 ReasonCode =:= ?RC_NOT_AUTHORIZED
-                             end, ReasonCodes) of
-                  true ->
-                      handle_out(disconnect, ?RC_NOT_AUTHORIZED, NChannel);
-                  false ->
-                      handle_out(suback, {PacketId, ReasonCodes}, NChannel)
-              end;
+        ok ->
+            TopicFilters0 = parse_topic_filters(TopicFilters),
+            TupleTopicFilters0 = check_sub_acls(TopicFilters0, Channel),
+            case emqx_zone:get_env(Zone, acl_deny_action, ignore) =:= disconnect andalso
+                 lists:any(fun({_TopicFilter, ReasonCode}) ->
+                                    ReasonCode =:= ?RC_NOT_AUTHORIZED
+                           end, TupleTopicFilters0) of
+                true -> handle_out(disconnect, ?RC_NOT_AUTHORIZED, Channel);
+                false ->
+                    Replace = fun
+                                _Fun(TupleList, [ Tuple = {Key, _Value} | More]) ->
+                                      _Fun(lists:keyreplace(Key, 1, TupleList, Tuple), More);
+                                _Fun(TupleList, []) -> TupleList
+                              end,
+                    TopicFilters1 = [ TopicFilter || {TopicFilter, 0} <- TupleTopicFilters0],
+                    TopicFilters2 = put_subid_in_subopts(Properties, TopicFilters1),
+                    TopicFilters3 = run_hooks('client.subscribe',
+                                              [ClientInfo, Properties],
+                                              TopicFilters2),
+                    {TupleTopicFilters1, NChannel} = process_subscribe(TopicFilters3,
+                                                                       Properties,
+                                                                       Channel),
+                    TupleTopicFilters2 = Replace(TupleTopicFilters0, TupleTopicFilters1),
+                    ReasonCodes2 = [ ReasonCode
+                                     || {_TopicFilter, ReasonCode} <- TupleTopicFilters2],
+                    handle_out(suback, {PacketId, ReasonCodes2}, NChannel)
+            end;
         {error, ReasonCode} ->
             handle_out(disconnect, ReasonCode, Channel)
     end;
@@ -398,8 +449,10 @@ handle_in(Packet = ?UNSUBSCRIBE_PACKET(PacketId, Properties, TopicFilters),
 handle_in(?PACKET(?PINGREQ), Channel) ->
     {ok, ?PACKET(?PINGRESP), Channel};
 
-handle_in(?DISCONNECT_PACKET(ReasonCode, Properties), Channel = #channel{conninfo = ConnInfo}) ->
-    NChannel = maybe_clean_will_msg(ReasonCode, Channel#channel{conninfo = ConnInfo#{disconn_props => Properties}}),
+handle_in(?DISCONNECT_PACKET(ReasonCode, Properties),
+          Channel = #channel{conninfo = ConnInfo}) ->
+    NConnInfo = ConnInfo#{disconn_props => Properties},
+    NChannel = maybe_clean_will_msg(ReasonCode, Channel#channel{conninfo = NConnInfo}),
     process_disconnect(ReasonCode, Properties, NChannel);
 
 handle_in(?AUTH_PACKET(), Channel) ->
@@ -430,7 +483,9 @@ handle_in(Packet, Channel) ->
 %% Process Connect
 %%--------------------------------------------------------------------
 
-process_connect(AckProps, Channel = #channel{conninfo = #{clean_start := CleanStart} = ConnInfo, clientinfo = ClientInfo}) ->
+process_connect(AckProps, Channel = #channel{conninfo = ConnInfo,
+                                             clientinfo = ClientInfo}) ->
+    #{clean_start := CleanStart} = ConnInfo,
     case emqx_cm:open_session(CleanStart, ClientInfo, ConnInfo) of
         {ok, #{session := Session, present := false}} ->
             NChannel = Channel#channel{session = Session},
@@ -471,8 +526,10 @@ process_publish(Packet = ?PUBLISH_PACKET(QoS, Topic, PacketId),
                 ignore ->
                     case QoS of
                        ?QOS_0 -> {ok, NChannel};
-                        _ ->
-                           handle_out(puback, {PacketId, Rc}, NChannel)
+                       ?QOS_1 ->
+                            handle_out(puback, {PacketId, Rc}, NChannel);
+                       ?QOS_2 ->
+                            handle_out(pubrec, {PacketId, Rc}, NChannel)
                     end;
                 disconnect ->
                     handle_out(disconnect, Rc, NChannel)
@@ -578,14 +635,17 @@ process_subscribe(TopicFilters, SubProps, Channel) ->
 process_subscribe([], _SubProps, Channel, Acc) ->
     {lists:reverse(Acc), Channel};
 
-process_subscribe([{TopicFilter, SubOpts}|More], SubProps, Channel, Acc) ->
-    case check_subscribe(TopicFilter, SubOpts, Channel) of
+process_subscribe([Topic = {TopicFilter, SubOpts}|More], SubProps, Channel, Acc) ->
+    case check_sub_caps(TopicFilter, SubOpts, Channel) of
          ok ->
-            {RC, NChannel} = do_subscribe(TopicFilter, SubOpts#{sub_props => SubProps}, Channel),
-            process_subscribe(More, SubProps, NChannel, [RC|Acc]);
-        {error, RC} ->
-            ?LOG(warning, "Cannot subscribe ~s due to ~s.", [TopicFilter, emqx_reason_codes:text(RC)]),
-            process_subscribe(More, SubProps, Channel, [RC|Acc])
+            {ReasonCode, NChannel} = do_subscribe(TopicFilter,
+                                                  SubOpts#{sub_props => SubProps},
+                                                  Channel),
+            process_subscribe(More, SubProps, NChannel, [{Topic, ReasonCode} | Acc]);
+        {error, ReasonCode} ->
+            ?LOG(warning, "Cannot subscribe ~s due to ~s.",
+                 [TopicFilter, emqx_reason_codes:text(ReasonCode)]),
+            process_subscribe(More, SubProps, Channel, [{Topic, ReasonCode} | Acc])
     end.
 
 do_subscribe(TopicFilter, SubOpts = #{qos := QoS}, Channel =
@@ -597,7 +657,8 @@ do_subscribe(TopicFilter, SubOpts = #{qos := QoS}, Channel =
         {ok, NSession} ->
             {QoS, Channel#channel{session = NSession}};
         {error, RC} ->
-            ?LOG(warning, "Cannot subscribe ~s due to ~s.", [TopicFilter, emqx_reason_codes:text(RC)]),
+            ?LOG(warning, "Cannot subscribe ~s due to ~s.",
+                 [TopicFilter, emqx_reason_codes:text(RC)]),
             {RC, Channel}
     end.
 
@@ -715,7 +776,10 @@ handle_out(connack, {?RC_SUCCESS, SP, Props}, Channel = #channel{conninfo = Conn
                          fun enrich_response_information/2,
                          fun enrich_assigned_clientid/2
                         ], Props, Channel),
-    NAckProps = run_hooks('client.connack', [ConnInfo, emqx_reason_codes:name(?RC_SUCCESS)], AckProps),
+    NAckProps = run_hooks('client.connack',
+                          [ConnInfo, emqx_reason_codes:name(?RC_SUCCESS)],
+                          AckProps
+                         ),
 
     return_connack(?CONNACK_PACKET(?RC_SUCCESS, SP, NAckProps),
                    ensure_keepalive(NAckProps, Channel));
@@ -750,17 +814,17 @@ handle_out(pubcomp, {PacketId, ReasonCode}, Channel) ->
     {ok, ?PUBCOMP_PACKET(PacketId, ReasonCode), Channel};
 
 handle_out(suback, {PacketId, ReasonCodes}, Channel = ?IS_MQTT_V5) ->
-    return_suback(?SUBACK_PACKET(PacketId, ReasonCodes), Channel);
+    return_sub_unsub_ack(?SUBACK_PACKET(PacketId, ReasonCodes), Channel);
 
 handle_out(suback, {PacketId, ReasonCodes}, Channel) ->
     ReasonCodes1 = [emqx_reason_codes:compat(suback, RC) || RC <- ReasonCodes],
-    return_suback(?SUBACK_PACKET(PacketId, ReasonCodes1), Channel);
+    return_sub_unsub_ack(?SUBACK_PACKET(PacketId, ReasonCodes1), Channel);
 
 handle_out(unsuback, {PacketId, ReasonCodes}, Channel = ?IS_MQTT_V5) ->
-    return_unsuback(?UNSUBACK_PACKET(PacketId, ReasonCodes), Channel);
+    return_sub_unsub_ack(?UNSUBACK_PACKET(PacketId, ReasonCodes), Channel);
 
 handle_out(unsuback, {PacketId, _ReasonCodes}, Channel) ->
-    return_unsuback(?UNSUBACK_PACKET(PacketId), Channel);
+    return_sub_unsub_ack(?UNSUBACK_PACKET(PacketId), Channel);
 
 handle_out(disconnect, ReasonCode, Channel) when is_integer(ReasonCode) ->
     ReasonName = disconnect_reason(ReasonCode),
@@ -833,10 +897,7 @@ do_deliver(Publishes, Channel) when is_list(Publishes) ->
 %% Handle out suback
 %%--------------------------------------------------------------------
 
-return_suback(Packet, Channel) ->
-    {ok, [{outgoing, Packet}, {event, updated}], Channel}.
-
-return_unsuback(Packet, Channel) ->
+return_sub_unsub_ack(Packet, Channel) ->
     {ok, [{outgoing, Packet}, {event, updated}], Channel}.
 
 %%--------------------------------------------------------------------
@@ -1069,7 +1130,6 @@ enrich_conninfo(ConnPkt = #mqtt_packet_connect{
                                    clientinfo = #{zone := Zone}
                                   }) ->
     ExpiryInterval = expiry_interval(Zone, ConnPkt),
-    ReceiveMaximum = receive_maximum(Zone, ConnProps),
     NConnInfo = ConnInfo#{proto_name  => ProtoName,
                           proto_ver   => ProtoVer,
                           clean_start => CleanStart,
@@ -1078,7 +1138,7 @@ enrich_conninfo(ConnPkt = #mqtt_packet_connect{
                           username    => Username,
                           conn_props  => ConnProps,
                           expiry_interval => ExpiryInterval,
-                          receive_maximum => ReceiveMaximum
+                          receive_maximum => receive_maximum(Zone, ConnProps)
                          },
     {ok, Channel#channel{conninfo = NConnInfo}}.
 
@@ -1092,9 +1152,16 @@ expiry_interval(Zone, #mqtt_packet_connect{clean_start = false}) ->
 expiry_interval(_Zone, #mqtt_packet_connect{clean_start = true}) ->
     0.
 
--compile({inline, [receive_maximum/2]}).
 receive_maximum(Zone, ConnProps) ->
-    emqx_mqtt_props:get('Receive-Maximum', ConnProps, emqx_zone:max_inflight(Zone)).
+    MaxInflightConfig = case emqx_zone:max_inflight(Zone) of
+                            0 -> ?RECEIVE_MAXIMUM_LIMIT;
+                            N -> N
+                        end,
+    %% Received might be zero which should be a protocol error
+    %% we do not validate MQTT properties here
+    %% it is to be caught later
+    Received = emqx_mqtt_props:get('Receive-Maximum', ConnProps, MaxInflightConfig),
+    erlang:min(Received, MaxInflightConfig).
 
 %%--------------------------------------------------------------------
 %% Run Connect Hooks
@@ -1173,11 +1240,10 @@ check_banned(_ConnPkt, #channel{clientinfo = ClientInfo = #{zone := Zone}}) ->
 %%--------------------------------------------------------------------
 %% Auth Connect
 
-auth_connect(#mqtt_packet_connect{clientid  = ClientId,
-                                  username  = Username,
-                                  password  = Password
-                                 },
+auth_connect(#mqtt_packet_connect{password  = Password},
              #channel{clientinfo = ClientInfo} = Channel) ->
+    #{clientid := ClientId,
+      username := Username} = ClientInfo,
     case emqx_access_control:authenticate(ClientInfo#{password => Password}) of
         {ok, AuthResult} ->
             is_anonymous(AuthResult) andalso
@@ -1210,7 +1276,10 @@ enhanced_auth(?CONNECT_PACKET(#mqtt_packet_connect{
     end;
 
 enhanced_auth(?AUTH_PACKET(_ReasonCode, Properties), Channel = #channel{conninfo = ConnInfo}) ->
-    AuthMethod = emqx_mqtt_props:get('Authentication-Method', emqx_mqtt_props:get(conn_props, ConnInfo, #{}), undefined),
+    AuthMethod = emqx_mqtt_props:get('Authentication-Method',
+                                     emqx_mqtt_props:get(conn_props, ConnInfo, #{}),
+                                     undefined
+                                    ),
     NAuthMethod = emqx_mqtt_props:get('Authentication-Method', Properties, undefined),
     AuthData = emqx_mqtt_props:get('Authentication-Data', Properties, undefined),
     case NAuthMethod =:= undefined orelse NAuthMethod =/= AuthMethod of
@@ -1227,12 +1296,14 @@ do_enhanced_auth(undefined, _AuthData, Channel) ->
 do_enhanced_auth(_AuthMethod, undefined, Channel) ->
     {error, emqx_reason_codes:connack_error(not_authorized), Channel};
 do_enhanced_auth(AuthMethod, AuthData, Channel = #channel{auth_cache = Cache}) ->
-    case run_hooks('client.enhanced_authenticate',[AuthMethod, AuthData], Cache) of
+    case run_hooks('client.enhanced_authenticate', [AuthMethod, AuthData], Cache) of
         {ok, NAuthData, NCache} ->
-            NProperties = #{'Authentication-Method' => AuthMethod, 'Authentication-Data' => NAuthData},
+            NProperties = #{'Authentication-Method' => AuthMethod,
+                            'Authentication-Data' => NAuthData},
             {ok, NProperties, Channel#channel{auth_cache = NCache}};
         {continue, NAuthData, NCache} ->
-            NProperties = #{'Authentication-Method' => AuthMethod, 'Authentication-Data' => NAuthData},
+            NProperties = #{'Authentication-Method' => AuthMethod,
+                            'Authentication-Data' => NAuthData},
             {continue, NProperties, Channel#channel{auth_cache = NCache}};
         _ ->
             {error, emqx_reason_codes:connack_error(not_authorized), Channel}
@@ -1274,9 +1345,10 @@ packing_alias(Packet = #mqtt_packet{
                                           properties = Prop
                                          } = Publish
                         },
-              Channel = ?IS_MQTT_V5 = #channel{topic_aliases = TopicAliases, alias_maximum = Limits}) ->
+              Channel = ?IS_MQTT_V5 = #channel{topic_aliases = TopicAliases,
+                                               alias_maximum = Limits}) ->
     case find_alias(outbound, Topic, TopicAliases) of
-        {ok, AliasId} -> 
+        {ok, AliasId} ->
             NPublish = Publish#mqtt_packet_publish{
                             topic_name = <<>>,
                             properties = maps:merge(Prop, #{'Topic-Alias' => AliasId})
@@ -1348,16 +1420,20 @@ check_pub_caps(#mqtt_packet{header = #mqtt_packet_header{qos    = QoS,
     emqx_mqtt_caps:check_pub(Zone, #{qos => QoS, retain => Retain, topic => Topic}).
 
 %%--------------------------------------------------------------------
-%% Check Subscribe
-
-check_subscribe(TopicFilter, SubOpts, Channel) ->
-    case check_sub_acl(TopicFilter, Channel) of
-        allow -> check_sub_caps(TopicFilter, SubOpts, Channel);
-        deny  -> {error, ?RC_NOT_AUTHORIZED}
-    end.
-
-%%--------------------------------------------------------------------
 %% Check Sub ACL
+
+check_sub_acls(TopicFilters, Channel) ->
+    check_sub_acls(TopicFilters, Channel, []).
+
+check_sub_acls([ TopicFilter = {Topic, _} | More] , Channel, Acc) ->
+    case check_sub_acl(Topic, Channel) of
+        allow ->
+            check_sub_acls(More, Channel, [ {TopicFilter, 0} | Acc]);
+        deny ->
+            check_sub_acls(More, Channel, [ {TopicFilter, ?RC_NOT_AUTHORIZED} | Acc])
+    end;
+check_sub_acls([], _Channel, Acc) ->
+    lists:reverse(Acc).
 
 check_sub_acl(TopicFilter, #channel{clientinfo = ClientInfo}) ->
     case is_acl_enabled(ClientInfo) andalso
@@ -1472,8 +1548,11 @@ init_alias_maximum(_ConnPkt, _ClientInfo) -> undefined.
 %%--------------------------------------------------------------------
 %% Enrich Keepalive
 
-ensure_keepalive(#{'Server-Keep-Alive' := Interval}, Channel) ->
-    ensure_keepalive_timer(Interval, Channel);
+%% MQTT 5
+ensure_keepalive(#{'Server-Keep-Alive' := Interval}, Channel = #channel{conninfo = ConnInfo}) ->
+    ensure_keepalive_timer(Interval, Channel#channel{conninfo = ConnInfo#{keepalive => Interval}});
+
+%% MQTT 3,4
 ensure_keepalive(_AckProps, Channel = #channel{conninfo = ConnInfo}) ->
     ensure_keepalive_timer(maps:get(keepalive, ConnInfo), Channel).
 
@@ -1540,15 +1619,20 @@ mabye_publish_will_msg(Channel = #channel{will_msg = undefined}) ->
     Channel;
 mabye_publish_will_msg(Channel = #channel{will_msg = WillMsg}) ->
     case will_delay_interval(WillMsg) of
-        0 -> publish_will_msg(WillMsg),
-             Channel#channel{will_msg = undefined};
-        I -> ensure_timer(will_timer, timer:seconds(I), Channel)
+        0 ->
+            ok = publish_will_msg(WillMsg),
+            Channel#channel{will_msg = undefined};
+        I ->
+            ensure_timer(will_timer, timer:seconds(I), Channel)
     end.
 
 will_delay_interval(WillMsg) ->
     maps:get('Will-Delay-Interval', emqx_message:get_header(properties, WillMsg), 0).
 
-publish_will_msg(Msg) -> emqx_broker:publish(Msg).
+publish_will_msg(Msg) ->
+    %% TODO check if we should discard result here
+    _ = emqx_broker:publish(Msg),
+    ok.
 
 %%--------------------------------------------------------------------
 %% Disconnect Reason
@@ -1573,7 +1657,7 @@ run_hooks(Name, Args, Acc) ->
 
 -compile({inline, [find_alias/3, save_alias/4]}).
 
-find_alias(_, _ ,undefined) -> false;
+find_alias(_, _, undefined) -> false;
 find_alias(inbound, AliasId, _TopicAliases = #{inbound := Aliases}) ->
     maps:find(AliasId, Aliases);
 find_alias(outbound, Topic, _TopicAliases = #{outbound := Aliases}) ->

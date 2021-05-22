@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -55,14 +55,39 @@ t_clean_acl_cache(_) ->
     ?assertEqual(0, length(gen_server:call(ClientPid, list_acl_cache))),
     emqtt:stop(Client).
 
+
+t_drain_acl_cache(_) ->
+    {ok, Client} = emqtt:start_link([{clientid, <<"emqx_c">>}]),
+    {ok, _} = emqtt:connect(Client),
+    {ok, _, _} = emqtt:subscribe(Client, <<"t2">>, 0),
+    emqtt:publish(Client, <<"t1">>, <<"{\"x\":1}">>, 0),
+    ct:sleep(100),
+    ClientPid = case emqx_cm:lookup_channels(<<"emqx_c">>) of
+                    [Pid] when is_pid(Pid) ->
+                        Pid;
+                    Pids when is_list(Pids) ->
+                        lists:last(Pids);
+                    _ -> {error, not_found}
+                end,
+    Caches = gen_server:call(ClientPid, list_acl_cache),
+    ct:log("acl caches: ~p", [Caches]),
+    ?assert(length(Caches) > 0),
+    emqx_acl_cache:drain_cache(),
+    ?assertEqual(0, length(gen_server:call(ClientPid, list_acl_cache))),
+    ct:sleep(100),
+    {ok, _, _} = emqtt:subscribe(Client, <<"t2">>, 0),
+    ?assert(length(gen_server:call(ClientPid, list_acl_cache)) > 0),
+    emqtt:stop(Client).
+
 % optimize??
-t_reload_aclfile_and_cleanall(Config) ->
+t_reload_aclfile_and_cleanall(_Config) ->
 
     RasieMsg = fun() -> Self = self(), #{puback => fun(Msg) -> Self ! {puback, Msg} end,
                                          disconnected => fun(_) ->  ok end,
                                          publish => fun(_) -> ok end } end,
 
-    {ok, Client} = emqtt:start_link([{clientid, <<"emqx_c">>}, {proto_ver, v5}, {msg_handler, RasieMsg()}]),
+    {ok, Client} = emqtt:start_link([{clientid, <<"emqx_c">>}, {proto_ver, v5},
+                                     {msg_handler, RasieMsg()}]),
     {ok, _} = emqtt:connect(Client),
 
     {ok, PktId} = emqtt:publish(Client, <<"t1">>, <<"{\"x\":1}">>, qos1),
@@ -78,27 +103,6 @@ t_reload_aclfile_and_cleanall(Config) ->
     %% Check acl cache list
     [ClientPid] = emqx_cm:lookup_channels(<<"emqx_c">>),
     ?assert(length(gen_server:call(ClientPid, list_acl_cache)) > 0),
-
-    %% Update acl file and reload mod_acl_internal
-    Path = filename:join([testdir(proplists:get_value(data_dir, Config)), "acl2.conf"]),
-    ok = file:write_file(Path, <<"{deny, all}.">>),
-    OldPath = emqx:get_env(acl_file),
-    % application:set_env(emqx, acl_file, Path),
-    emqx_mod_acl_internal:reload([{acl_file, Path}]),
-
-    ?assert(length(gen_server:call(ClientPid, list_acl_cache)) == 0),
-    {ok, PktId2} = emqtt:publish(Client, <<"t1">>, <<"{\"x\":1}">>, qos1),
-
-    receive
-        {puback, #{packet_id := PktId2, reason_code := Rc2}} ->
-            %% Not authorized
-            ?assertEqual(16#87, Rc2);
-        _ ->
-            ?assert(false)
-    end,
-    application:set_env(emqx, acl_file, OldPath),
-    file:delete(Path),
-    emqx_mod_acl_internal:reload([{acl_file, OldPath}]),
     emqtt:stop(Client).
 
 %% @private

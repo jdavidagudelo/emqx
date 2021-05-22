@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2020 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -75,6 +75,7 @@
 
 -export([ deliver/2
         , enqueue/2
+        , dequeue/1
         , retry/1
         , terminate/3
         ]).
@@ -662,7 +663,7 @@ inc_expired_cnt(message, N) ->
 
 -compile({inline, [next_pkt_id/1]}).
 
-next_pkt_id(Session = #session{next_pkt_id = 16#FFFF}) ->
+next_pkt_id(Session = #session{next_pkt_id = ?MAX_PACKET_ID}) ->
     Session#session{next_pkt_id = 1};
 
 next_pkt_id(Session = #session{next_pkt_id = Id}) ->
