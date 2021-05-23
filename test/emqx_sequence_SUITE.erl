@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,6 +28,21 @@
         ]).
 
 all() -> emqx_ct:all(?MODULE).
+
+% t_currval(_) ->
+%     error('TODO').
+
+% t_delete(_) ->
+%     error('TODO').
+
+% t_create(_) ->
+%     error('TODO').
+
+% t_reclaim(_) ->
+%     error('TODO').
+
+% t_nextval(_) ->
+%     error('TODO').
 
 t_generate(_) ->
     ok = emqx_sequence:create(seqtab),

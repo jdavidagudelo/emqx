@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,8 +18,8 @@
 
 -behavior(gen_server).
 
--include("logger.hrl").
 -include("types.hrl").
+-include("logger.hrl").
 
 -logger_header("[SYSMON]").
 
@@ -55,7 +55,7 @@ start_link(Opts) ->
 %%--------------------------------------------------------------------
 
 init([Opts]) ->
-    erlang:system_monitor(self(), parse_opt(Opts)),
+    _ = erlang:system_monitor(self(), parse_opt(Opts)),
     emqx_logger:set_proc_metadata(#{sysmon => true}),
 
     %% Monitor cluster partition event
@@ -165,19 +165,21 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 
 handle_partition_event({partition, {occurred, Node}}) ->
-    alarm_handler:set_alarm({partitioned, Node});
-handle_partition_event({partition, {healed, Node}}) ->
-    alarm_handler:clear_alarm(partitioned).
+    emqx_alarm:activate(partition, #{occurred => Node});
+handle_partition_event({partition, {healed, _Node}}) ->
+    emqx_alarm:deactivate(partition).
 
 suppress(Key, SuccFun, State = #{events := Events}) ->
     case lists:member(Key, Events) of
-        true  -> {noreply, State};
-        false -> SuccFun(),
-                 {noreply, State#{events := [Key|Events]}}
+        true ->
+            {noreply, State};
+        false ->
+            _ = SuccFun(),
+            {noreply, State#{events := [Key|Events]}}
     end.
 
 procinfo(Pid) ->
-    case {emqx_vm:get_process_info(Pid), emqx_vm:get_process_gc(Pid)} of
+    case {emqx_vm:get_process_info(Pid), emqx_vm:get_process_gc_info(Pid)} of
         {undefined, _} -> undefined;
         {_, undefined} -> undefined;
         {Info, GcInfo} -> Info ++ GcInfo

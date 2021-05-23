@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,30 +25,94 @@
 all() -> emqx_ct:all(?MODULE).
 
 init_per_suite(Config) ->
-    emqx_ct_helpers:start_apps([]),
+    ok = emqx_logger:set_log_level(emergency),
     Config.
 
 end_per_suite(_Config) ->
-    emqx_ct_helpers:stop_apps([]).
+    ok.
 
-t_command(_) ->
-    emqx_ctl:start_link(),
-    emqx_ctl:register_command(test, {?MODULE, test}),
-    ct:sleep(50),
-    ?assertEqual([{emqx_ctl_SUITE,test}], emqx_ctl:lookup_command(test)),
-    ?assertEqual(ok, emqx_ctl:run_command(["test", "ok"])),
-    ?assertEqual({error, test_failed}, emqx_ctl:run_command(["test", "error"])),
-    ?assertEqual({error, cmd_not_found}, emqx_ctl:run_command(["test2", "ok"])),
-    emqx_ctl:unregister_command(test),
-    ct:sleep(50),
-    ?assertEqual([], emqx_ctl:lookup_command(test)).
+%%--------------------------------------------------------------------
+%% Test cases
+%%--------------------------------------------------------------------
 
-test(["ok"]) ->
-    ok;
-test(["error"]) ->
-    error(test_failed);
-test(_) ->
-    io:format("Hello world").
+t_reg_unreg_command(_) ->
+    with_ctl_server(
+      fun(_CtlSrv) ->
+            emqx_ctl:register_command(cmd1, {?MODULE, cmd1_fun}),
+            emqx_ctl:register_command(cmd2, {?MODULE, cmd2_fun}),
+            ?assertEqual([{?MODULE, cmd1_fun}], emqx_ctl:lookup_command(cmd1)),
+            ?assertEqual([{?MODULE, cmd2_fun}], emqx_ctl:lookup_command(cmd2)),
+            ?assertEqual([{cmd1, ?MODULE, cmd1_fun}, {cmd2, ?MODULE, cmd2_fun}],
+                         emqx_ctl:get_commands()),
+            emqx_ctl:unregister_command(cmd1),
+            emqx_ctl:unregister_command(cmd2),
+            ct:sleep(100),
+            ?assertEqual([], emqx_ctl:lookup_command(cmd1)),
+            ?assertEqual([], emqx_ctl:lookup_command(cmd2)),
+            ?assertEqual([], emqx_ctl:get_commands())
+      end).
 
+t_run_commands(_) ->
+    with_ctl_server(
+      fun(_CtlSrv) ->
+            ?assertEqual({error, cmd_not_found}, emqx_ctl:run_command(["cmd", "arg"])),
+            emqx_ctl:register_command(cmd1, {?MODULE, cmd1_fun}),
+            emqx_ctl:register_command(cmd2, {?MODULE, cmd2_fun}),
+            ok = emqx_ctl:run_command(["cmd1", "arg"]),
+            {error, badarg} = emqx_ctl:run_command(["cmd1", "badarg"]),
+            ok = emqx_ctl:run_command(["cmd2", "arg1", "arg2"]),
+            {error, badarg} = emqx_ctl:run_command(["cmd2", "arg1", "badarg"])
+      end).
 
+t_print(_) ->
+    ok = emqx_ctl:print("help"),
+    ok = emqx_ctl:print("~s", [help]),
+    % - check the output of the usage
+    mock_print(),
+    ?assertEqual("help", emqx_ctl:print("help")),
+    ?assertEqual("help", emqx_ctl:print("~s", [help])),
+    unmock_print().
 
+t_usage(_) ->
+    CmdParams1 = "emqx_cmd_1 param1 param2",
+    CmdDescr1 = "emqx_cmd_1 is a test command means nothing",
+    % - usage/1,2 should return ok
+    ok = emqx_ctl:usage([{CmdParams1, CmdDescr1}, {CmdParams1, CmdDescr1}]),
+    ok = emqx_ctl:usage(CmdParams1, CmdDescr1).
+
+t_unexpected(_) ->
+    with_ctl_server(
+      fun(CtlSrv) ->
+              ignored = gen_server:call(CtlSrv, unexpected_call),
+              ok = gen_server:cast(CtlSrv, unexpected_cast),
+              CtlSrv ! unexpected_info,
+              ?assert(is_process_alive(CtlSrv))
+      end).
+
+%%--------------------------------------------------------------------
+%% Cmds for test
+%%--------------------------------------------------------------------
+
+cmd1_fun(["arg"]) -> ok;
+cmd1_fun(["badarg"]) -> error(badarg).
+
+cmd2_fun(["arg1", "arg2"]) -> ok;
+cmd2_fun(["arg1", "badarg"]) -> error(badarg).
+
+with_ctl_server(Fun) ->
+    {ok, Pid} = emqx_ctl:start_link(),
+    _ = Fun(Pid),
+    ok = emqx_ctl:stop().
+
+mock_print() ->
+    %% proxy usage/1,2 and print/1,2 to format_xx/1,2 funcs
+    catch meck:unload(emqx_ctl),
+    meck:new(emqx_ctl, [non_strict, passthrough]),
+    meck:expect(emqx_ctl, print, fun(Arg) -> emqx_ctl:format(Arg) end),
+    meck:expect(emqx_ctl, print, fun(Msg, Arg) -> emqx_ctl:format(Msg, Arg) end),
+    meck:expect(emqx_ctl, usage, fun(Usages) -> emqx_ctl:format_usage(Usages) end),
+    meck:expect(emqx_ctl, usage, fun(CmdParams, CmdDescr) ->
+                                         emqx_ctl:format_usage(CmdParams, CmdDescr) end).
+
+unmock_print() ->
+    meck:unload(emqx_ctl).

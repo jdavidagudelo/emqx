@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -96,23 +96,6 @@
 -define(DISCONNECT,  14). %% Client or Server is disconnecting
 -define(AUTH,        15). %% Authentication exchange
 
--define(TYPE_NAMES, [
-        'CONNECT',
-        'CONNACK',
-        'PUBLISH',
-        'PUBACK',
-        'PUBREC',
-        'PUBREL',
-        'PUBCOMP',
-        'SUBSCRIBE',
-        'SUBACK',
-        'UNSUBSCRIBE',
-        'UNSUBACK',
-        'PINGREQ',
-        'PINGRESP',
-        'DISCONNECT',
-        'AUTH']).
-
 %%--------------------------------------------------------------------
 %% MQTT V3.1.1 Connect Return Codes
 %%--------------------------------------------------------------------
@@ -178,8 +161,10 @@
 %% Maximum MQTT Packet ID and Length
 %%--------------------------------------------------------------------
 
--define(MAX_PACKET_ID, 16#ffff).
--define(MAX_PACKET_SIZE, 16#fffffff).
+-define(MAX_PACKET_ID, 16#FFFF).
+-define(MAX_PACKET_SIZE, 16#FFFFFFF).
+-define(MAX_TOPIC_AlIAS, 16#FFFF).
+-define(RECEIVE_MAXIMUM_LIMIT, ?MAX_PACKET_ID).
 
 %%--------------------------------------------------------------------
 %% MQTT Frame Mask
@@ -218,9 +203,9 @@
           will_qos     = ?QOS_0,
           will_retain  = false,
           keepalive    = 0,
-          properties   = undefined,
-          client_id    = <<>>,
-          will_props   = undefined,
+          properties   = #{},
+          clientid     = <<>>,
+          will_props   = #{},
           will_topic   = undefined,
           will_payload = undefined,
           username     = undefined,
@@ -230,53 +215,53 @@
 -record(mqtt_packet_connack, {
           ack_flags,
           reason_code,
-          properties
+          properties = #{}
         }).
 
 -record(mqtt_packet_publish, {
           topic_name,
           packet_id,
-          properties
+          properties = #{}
         }).
 
 -record(mqtt_packet_puback, {
           packet_id,
           reason_code,
-          properties
+          properties = #{}
         }).
 
 -record(mqtt_packet_subscribe, {
           packet_id,
-          properties,
+          properties = #{},
           topic_filters
         }).
 
 -record(mqtt_packet_suback, {
           packet_id,
-          properties,
+          properties = #{},
           reason_codes
         }).
 
 -record(mqtt_packet_unsubscribe, {
           packet_id,
-          properties,
+          properties = #{},
           topic_filters
         }).
 
 -record(mqtt_packet_unsuback, {
           packet_id,
-          properties,
+          properties = #{},
           reason_codes
         }).
 
 -record(mqtt_packet_disconnect, {
           reason_code,
-          properties
+          properties = #{}
         }).
 
 -record(mqtt_packet_auth, {
           reason_code,
-          properties
+          properties = #{}
         }).
 
 %%--------------------------------------------------------------------
@@ -317,6 +302,9 @@
 %%--------------------------------------------------------------------
 %% MQTT Packet Match
 %%--------------------------------------------------------------------
+
+-define(CONNECT_PACKET(),
+        #mqtt_packet{header = #mqtt_packet_header{type = ?CONNECT}}).
 
 -define(CONNECT_PACKET(Var),
     #mqtt_packet{header   = #mqtt_packet_header{type = ?CONNECT},

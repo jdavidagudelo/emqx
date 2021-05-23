@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,7 +26,10 @@
 
 -export([ get_caps/1
         , get_caps/2
+        , get_caps/3
         ]).
+
+-export([default_caps/0]).
 
 -export([default/0]).
 
@@ -45,7 +48,7 @@
 
 -define(UNLIMITED, 0).
 
--define(PUBCAP_KEYS, [max_topic_alias,
+-define(PUBCAP_KEYS, [max_topic_levels,
                       max_qos_allowed,
                       retain_available
                      ]).
@@ -58,7 +61,7 @@
 
 -define(DEFAULT_CAPS, #{max_packet_size => ?MAX_PACKET_SIZE,
                         max_clientid_len => ?MAX_CLIENTID_LEN,
-                        max_topic_alias => ?UNLIMITED,
+                        max_topic_alias => ?MAX_TOPIC_AlIAS,
                         max_topic_levels => ?UNLIMITED,
                         max_qos_allowed => ?QOS_2,
                         retain_available => true,
@@ -68,12 +71,21 @@
                        }).
 
 -spec(check_pub(emqx_types:zone(),
-                #{qos => emqx_types:qos(),
-                  retain => boolean()})
+                #{qos := emqx_types:qos(),
+                  retain := boolean(),
+                  topic := emqx_topic:topic()})
       -> ok_or_error(emqx_types:reason_code())).
 check_pub(Zone, Flags) when is_map(Flags) ->
-    do_check_pub(Flags, get_caps(Zone, publish)).
+    do_check_pub(case maps:take(topic, Flags) of
+                     {Topic, Flags1} ->
+                         Flags1#{topic_levels => emqx_topic:levels(Topic)};
+                     error ->
+                         Flags
+                 end, get_caps(Zone, publish)).
 
+do_check_pub(#{topic_levels := Levels}, #{max_topic_levels := Limit})
+  when Limit > 0, Levels > Limit ->
+    {error, ?RC_TOPIC_NAME_INVALID};
 do_check_pub(#{qos := QoS}, #{max_qos_allowed := MaxQoS})
   when QoS > MaxQoS ->
     {error, ?RC_QOS_NOT_SUPPORTED};
@@ -107,40 +119,42 @@ do_check_sub(#{is_shared := true}, #{shared_subscription := false}) ->
     {error, ?RC_SHARED_SUBSCRIPTIONS_NOT_SUPPORTED};
 do_check_sub(_Flags, _Caps) -> ok.
 
--spec(get_caps(emqx_zone:zone()) -> caps()).
-get_caps(Zone) ->
-    with_env(Zone, '$mqtt_caps', fun all_caps/1).
+default_caps() ->
+    ?DEFAULT_CAPS.
 
--spec(get_caps(emqx_zone:zone(), publish|subscribe) -> caps()).
+get_caps(Zone, Cap, Def) ->
+    emqx_zone:get_env(Zone, Cap, Def).
+
 get_caps(Zone, publish) ->
-    with_env(Zone, '$mqtt_pub_caps', fun pub_caps/1);
+    with_env(Zone, '$mqtt_pub_caps',
+             fun() ->
+                 filter_caps(?PUBCAP_KEYS, get_caps(Zone))
+             end);
 
 get_caps(Zone, subscribe) ->
-    with_env(Zone, '$mqtt_sub_caps', fun sub_caps/1).
+    with_env(Zone, '$mqtt_sub_caps',
+             fun() ->
+                 filter_caps(?SUBCAP_KEYS, get_caps(Zone))
+             end).
 
-pub_caps(Zone) ->
-    filter_caps(?PUBCAP_KEYS, get_caps(Zone)).
-
-sub_caps(Zone) ->
-    filter_caps(?SUBCAP_KEYS, get_caps(Zone)).
-
-all_caps(Zone) ->
-    maps:map(fun(Cap, Def) ->
-                     emqx_zone:get_env(Zone, Cap, Def)
-             end, ?DEFAULT_CAPS).
+get_caps(Zone) ->
+    with_env(Zone, '$mqtt_caps',
+             fun() ->
+                maps:map(fun(Cap, Def) ->
+                    emqx_zone:get_env(Zone, Cap, Def)
+                end, ?DEFAULT_CAPS)
+             end).
 
 filter_caps(Keys, Caps) ->
     maps:filter(fun(Key, _Val) -> lists:member(Key, Keys) end, Caps).
 
-with_env(Zone, Key, InitFun) ->
-    case emqx_zone:get_env(Zone, Key) of
-        undefined ->
-            Caps = InitFun(Zone),
-            ok = emqx_zone:set_env(Zone, Key, Caps),
-            Caps;
-        Caps -> Caps
-    end.
-
 -spec(default() -> caps()).
 default() -> ?DEFAULT_CAPS.
 
+with_env(Zone, Key, InitFun) ->
+    case emqx_zone:get_env(Zone, Key) of
+        undefined -> Caps = InitFun(),
+                     ok = emqx_zone:set_env(Zone, Key, Caps),
+                     Caps;
+        ZoneCaps  -> ZoneCaps
+    end.

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ start_link() ->
     supervisor:start_link({local, ?SUP}, ?MODULE, []).
 
 -spec(start_child(supervisor:child_spec()) -> startchild_ret()).
-start_child(ChildSpec) when is_tuple(ChildSpec) ->
+start_child(ChildSpec) when is_map(ChildSpec) ->
     supervisor:start_child(?SUP, ChildSpec).
 
 -spec(start_child(module(), worker | supervisor) -> startchild_ret()).
@@ -62,18 +62,21 @@ stop_child(ChildId) ->
 %%--------------------------------------------------------------------
 
 init([]) ->
-    %% Kernel Sup
     KernelSup = child_spec(emqx_kernel_sup, supervisor),
-    %% Router Sup
     RouterSup = child_spec(emqx_router_sup, supervisor),
-    %% Broker Sup
     BrokerSup = child_spec(emqx_broker_sup, supervisor),
-    %% CM Sup
     CMSup = child_spec(emqx_cm_sup, supervisor),
-    %% Sys Sup
     SysSup = child_spec(emqx_sys_sup, supervisor),
-    {ok, {{one_for_all, 0, 1},
-          [KernelSup, RouterSup, BrokerSup, CMSup, SysSup]}}.
+    Childs = [KernelSup] ++
+             [RouterSup || emqx_boot:is_enabled(router)] ++
+             [BrokerSup || emqx_boot:is_enabled(broker)] ++
+             [CMSup || emqx_boot:is_enabled(broker)] ++
+             [SysSup],
+    SupFlags = #{strategy => one_for_all,
+                 intensity => 0,
+                 period => 1
+                },
+    {ok, {SupFlags, Childs}}.
 
 %%--------------------------------------------------------------------
 %% Internal functions

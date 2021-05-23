@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,37 +19,57 @@
 -compile(export_all).
 -compile(nowarn_export_all).
 
+-include_lib("eunit/include/eunit.hrl").
+
 all() -> emqx_ct:all(?MODULE).
 
 init_per_suite(Config) ->
-    emqx_ct_helpers:start_apps([]),
-    prepare_for_test(),
+    emqx_ct_helpers:boot_modules(all),
+    emqx_ct_helpers:start_apps([], fun set_special_configs/1),
     Config.
 
+set_special_configs(emqx) ->
+    emqx_zone:set_env(external, enable_flapping_detect, true),
+    application:set_env(emqx, flapping_detect_policy,
+                        #{threshold => 3,
+                          duration => 100,
+                          banned_interval => 2
+                         });
+set_special_configs(_App) -> ok.
+
 end_per_suite(_Config) ->
-    emqx_ct_helpers:stop_apps([]).
+    emqx_ct_helpers:stop_apps([]),
+    ekka_mnesia:delete_schema(),    %% Clean emqx_banned table
+    ok.
 
-%% t_flapping(_Config) ->
-%%     process_flag(trap_exit, true),
-%%     flapping_connect(5),
-%%     {ok, C} = emqtt:start_link([{client_id, <<"Client">>}]),
-%%     {error, _} = emqtt:connect(C),
-%%     receive
-%%         {'EXIT', Client, _Reason} ->
-%%             ct:log("receive exit signal, Client: ~p", [Client])
-%%     after 1000 ->
-%%             ct:log("timeout")
-%%     end.
+t_detect_check(_) ->
+    ClientInfo = #{zone => external,
+                   clientid => <<"clientid">>,
+                   peerhost => {127,0,0,1}
+                  },
+    false = emqx_flapping:detect(ClientInfo),
+    false = emqx_banned:check(ClientInfo),
+    false = emqx_flapping:detect(ClientInfo),
+    false = emqx_banned:check(ClientInfo),
+    true = emqx_flapping:detect(ClientInfo),
+    timer:sleep(50),
+    true = emqx_banned:check(ClientInfo),
+    timer:sleep(3000),
+    false = emqx_banned:check(ClientInfo),
+    Childrens = supervisor:which_children(emqx_cm_sup),
+    {flapping, Pid, _, _} = lists:keyfind(flapping, 1, Childrens),
+    gen_server:call(Pid, unexpected_msg),
+    gen_server:cast(Pid, unexpected_msg),
+    Pid ! test,
+    ok = emqx_flapping:stop().
 
-flapping_connect(Times) ->
-    lists:foreach(fun do_connect/1, lists:seq(1, Times)).
-
-do_connect(_I) ->
-    {ok, C} = emqtt:start_link([{client_id, <<"Client">>}]),
-    {ok, _} = emqtt:connect(C),
-    ok = emqtt:disconnect(C).
-
-prepare_for_test() ->
-    ok = emqx_zone:set_env(external, enable_flapping_detect, true),
-    ok = emqx_zone:set_env(external, flapping_threshold, {10, 60}),
-    ok = emqx_zone:set_env(external, flapping_expiry_interval, 3600).
+t_expired_detecting(_) ->
+    ClientInfo = #{zone => external,
+                   clientid => <<"clientid">>,
+                   peerhost => {127,0,0,1}},
+    false = emqx_flapping:detect(ClientInfo),
+    ?assertEqual(true, lists:any(fun({flapping, <<"clientid">>, _, _, _}) -> true;
+                                    (_) -> false end, ets:tab2list(emqx_flapping))),
+    timer:sleep(200),
+    ?assertEqual(true, lists:all(fun({flapping, <<"clientid">>, _, _, _}) -> false;
+                                    (_) -> true end, ets:tab2list(emqx_flapping))).

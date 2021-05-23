@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 -compile(export_all).
 -compile(nowarn_export_all).
 
--include("emqx.hrl").
+-include_lib("emqx/include/emqx.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("common_test/include/ct.hrl").
 
@@ -29,14 +29,43 @@
         emqx_ct_helpers:wait_for(
           ?FUNCTION_NAME, ?LINE, fun() -> For end, Timeout)).
 
+-define(ack, shared_sub_ack).
+-define(no_ack, no_ack).
+
 all() -> emqx_ct:all(?SUITE).
 
 init_per_suite(Config) ->
+    emqx_ct_helpers:boot_modules(all),
     emqx_ct_helpers:start_apps([]),
     Config.
 
 end_per_suite(_Config) ->
     emqx_ct_helpers:stop_apps([]).
+
+t_is_ack_required(_) ->
+    ?assertEqual(false, emqx_shared_sub:is_ack_required(#message{headers = #{}})).
+
+t_maybe_nack_dropped(_) ->
+    ?assertEqual(ok, emqx_shared_sub:maybe_nack_dropped(#message{headers = #{}})),
+    Msg = #message{headers = #{shared_dispatch_ack => {self(), for_test}}},
+    ?assertEqual(ok, emqx_shared_sub:maybe_nack_dropped(Msg)),
+    ?assertEqual(ok,receive {for_test, {shared_sub_nack, dropped}} -> ok after 100 -> timeout end).
+
+t_nack_no_connection(_) ->
+    Msg = #message{headers = #{shared_dispatch_ack => {self(), for_test}}},
+    ?assertEqual(ok, emqx_shared_sub:nack_no_connection(Msg)),
+    ?assertEqual(ok,receive {for_test, {shared_sub_nack, no_connection}} -> ok
+                    after 100 -> timeout end).
+
+t_maybe_ack(_) ->
+    ?assertEqual(#message{headers = #{}}, emqx_shared_sub:maybe_ack(#message{headers = #{}})),
+    Msg = #message{headers = #{shared_dispatch_ack => {self(), for_test}}},
+    ?assertEqual(#message{headers = #{shared_dispatch_ack => ?no_ack}},
+                 emqx_shared_sub:maybe_ack(Msg)),
+    ?assertEqual(ok,receive {for_test, ?ack} -> ok after 100 -> timeout end).
+
+% t_subscribers(_) ->
+%     error('TODO').
 
 t_random_basic(_) ->
     ok = ensure_config(random),
@@ -79,9 +108,9 @@ t_no_connection_nack(_) ->
     ShareTopic = <<"$share/", Group/binary, $/, Topic/binary>>,
 
     ExpProp = [{properties, #{'Session-Expiry-Interval' => timer:seconds(30)}}],
-    {ok, SubConnPid1} = emqtt:start_link([{client_id, Subscriber1}] ++ ExpProp),
+    {ok, SubConnPid1} = emqtt:start_link([{clientid, Subscriber1}] ++ ExpProp),
     {ok, _Props} = emqtt:connect(SubConnPid1),
-    {ok, SubConnPid2} = emqtt:start_link([{client_id, Subscriber2}] ++ ExpProp),
+    {ok, SubConnPid2} = emqtt:start_link([{clientid, Subscriber2}] ++ ExpProp),
     {ok, _Props} = emqtt:connect(SubConnPid2),
     emqtt:subscribe(SubConnPid1, ShareTopic, QoS),
     emqtt:subscribe(SubConnPid1, ShareTopic, QoS),
@@ -100,7 +129,8 @@ t_no_connection_nack(_) ->
     %% This is the connection which was picked by broker to dispatch (sticky) for 1st message
 
     ?assertMatch([#{packet_id := 1}], recv_msgs(1)),
-    %% Now kill the connection, expect all following messages to be delivered to the other subscriber.
+    %% Now kill the connection, expect all following messages to be delivered to the other
+    %% subscriber.
     %emqx_mock_client:stop(ConnPid),
     %% sleep then make synced calls to session processes to ensure that
     %% the connection pid's 'EXIT' message is propagated to the session process
@@ -145,14 +175,55 @@ t_sticky(_) ->
 t_hash(_) ->
     test_two_messages(hash, false).
 
+t_hash_clinetid(_) ->
+    test_two_messages(hash_clientid, false).
+
+t_hash_topic(_) ->
+    ok = ensure_config(hash_topic, false),
+    ClientId1 = <<"ClientId1">>,
+    ClientId2 = <<"ClientId2">>,
+    {ok, ConnPid1} = emqtt:start_link([{clientid, ClientId1}]),
+    {ok, _} = emqtt:connect(ConnPid1),
+    {ok, ConnPid2} = emqtt:start_link([{clientid, ClientId2}]),
+    {ok, _} = emqtt:connect(ConnPid2),
+
+    Topic1 = <<"foo/bar1">>,
+    Topic2 = <<"foo/bar2">>,
+    ?assert(erlang:phash2(Topic1) rem 2 =/= erlang:phash2(Topic2) rem 2),
+    Message1 = emqx_message:make(ClientId1, 0, Topic1, <<"hello1">>),
+    Message2 = emqx_message:make(ClientId1, 0, Topic2, <<"hello2">>),
+    emqtt:subscribe(ConnPid1, {<<"$share/group1/foo/#">>, 0}),
+    emqtt:subscribe(ConnPid2, {<<"$share/group1/foo/#">>, 0}),
+    ct:sleep(100),
+    emqx:publish(Message1),
+    Me = self(),
+    WaitF = fun(ExpectedPayload) ->
+                    case last_message(ExpectedPayload, [ConnPid1, ConnPid2]) of
+                        {true, Pid} ->
+                            Me ! {subscriber, Pid},
+                            true;
+                        Other ->
+                            Other
+                    end
+            end,
+    WaitF(<<"hello1">>),
+    UsedSubPid1 = receive {subscriber, P1} -> P1 end,
+    emqx_broker:publish(Message2),
+    WaitF(<<"hello2">>),
+    UsedSubPid2 = receive {subscriber, P2} -> P2 end,
+    ?assert(UsedSubPid1 =/= UsedSubPid2),
+    emqtt:stop(ConnPid1),
+    emqtt:stop(ConnPid2),
+    ok.
+
 %% if the original subscriber dies, change to another one alive
 t_not_so_sticky(_) ->
     ok = ensure_config(sticky),
     ClientId1 = <<"ClientId1">>,
     ClientId2 = <<"ClientId2">>,
-    {ok, C1} = emqtt:start_link([{client_id, ClientId1}]),
+    {ok, C1} = emqtt:start_link([{clientid, ClientId1}]),
     {ok, _} = emqtt:connect(C1),
-    {ok, C2} = emqtt:start_link([{client_id, ClientId2}]),
+    {ok, C2} = emqtt:start_link([{clientid, ClientId2}]),
     {ok, _} = emqtt:connect(C2),
 
     emqtt:subscribe(C1, {<<"$share/group1/foo/bar">>, 0}),
@@ -178,9 +249,9 @@ test_two_messages(Strategy, WithAck) ->
     Topic = <<"foo/bar">>,
     ClientId1 = <<"ClientId1">>,
     ClientId2 = <<"ClientId2">>,
-    {ok, ConnPid1} = emqtt:start_link([{client_id, ClientId1}]),
+    {ok, ConnPid1} = emqtt:start_link([{clientid, ClientId1}]),
     {ok, _} = emqtt:connect(ConnPid1),
-    {ok, ConnPid2} = emqtt:start_link([{client_id, ClientId2}]),
+    {ok, ConnPid2} = emqtt:start_link([{clientid, ClientId2}]),
     {ok, _} = emqtt:connect(ConnPid2),
 
     Message1 = emqx_message:make(ClientId1, 0, Topic, <<"hello1">>),
@@ -223,6 +294,26 @@ last_message(ExpectedPayload, Pids) ->
         <<"not yet?">>
     end.
 
+t_dispatch(_) ->
+    ok = ensure_config(random),
+    Topic = <<"foo">>,
+    ?assertEqual({error, no_subscribers},
+                 emqx_shared_sub:dispatch(<<"group1">>, Topic, #delivery{message = #message{}})),
+    emqx:subscribe(Topic, #{qos => 2, share => <<"group1">>}),
+    ?assertEqual({ok, 1},
+                 emqx_shared_sub:dispatch(<<"group1">>, Topic, #delivery{message = #message{}})).
+
+% t_unsubscribe(_) ->
+%     error('TODO').
+
+% t_subscribe(_) ->
+%     error('TODO').
+t_uncovered_func(_) ->
+    ignored = gen_server:call(emqx_shared_sub, ignored),
+    ok = gen_server:cast(emqx_shared_sub, ignored),
+    ignored = emqx_shared_sub ! ignored,
+    {mnesia_table_event, []} = emqx_shared_sub ! {mnesia_table_event, []}.
+
 %%--------------------------------------------------------------------
 %% help functions
 %%--------------------------------------------------------------------
@@ -251,3 +342,4 @@ recv_msgs(Count, Msgs) ->
     after 100 ->
         Msgs
     end.
+

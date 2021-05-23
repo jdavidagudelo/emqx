@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,6 +23,21 @@
 
 all() -> emqx_ct:all(?MODULE).
 
+% t_lookup(_) ->
+%     error('TODO').
+
+% t_run_fold(_) ->
+%     error('TODO').
+
+% t_run(_) ->
+%     error('TODO').
+
+% t_del(_) ->
+%     error('TODO').
+
+% t_add(_) ->
+%     error('TODO').
+    
 t_add_del_hook(_) ->
     {ok, _} = emqx_hooks:start_link(),
     ok = emqx:hook(test_hook, fun ?MODULE:hook_fun1/1, []),
@@ -82,6 +97,14 @@ t_run_hooks(_) ->
     ?assertEqual(3, emqx:run_fold_hook(foldl_filter2_hook, [arg], 1)),
     ?assertEqual(2, emqx:run_fold_hook(foldl_filter2_hook, [arg1], 1)),
 
+    ok = emqx_hooks:stop().
+
+t_uncovered_func(_) ->
+    {ok, _} = emqx_hooks:start_link(),
+    Pid = erlang:whereis(emqx_hooks),
+    gen_server:call(Pid, test),
+    gen_server:cast(Pid, test),
+    Pid ! test,
     ok = emqx_hooks:stop().
 
 %%--------------------------------------------------------------------

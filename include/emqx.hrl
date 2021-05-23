@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -62,16 +62,18 @@
           %% Message from
           from :: atom() | binary(),
           %% Message flags
-          flags :: #{atom() => boolean()},
-          %% Message headers, or MQTT 5.0 Properties
-          headers = #{},
+          flags = #{} :: emqx_types:flags(),
+          %% Message headers. May contain any metadata. e.g. the
+          %% protocol version number, username, peerhost or
+          %% the PUBLISH properties (MQTT 5.0).
+          headers = #{} :: emqx_types:headers(),
           %% Topic that the message is published to
-          topic :: binary(),
+          topic :: emqx_types:topic(),
           %% Message Payload
-          payload :: binary(),
-          %% Timestamp
-          timestamp :: erlang:timestamp()
-        }).
+          payload :: emqx_types:payload(),
+          %% Timestamp (Unit: millisecond)
+          timestamp :: integer()
+         }).
 
 -record(delivery, {
           sender  :: pid(),      %% Sender of the delivery
@@ -88,52 +90,16 @@
          }).
 
 %%--------------------------------------------------------------------
-%% Trie
-%%--------------------------------------------------------------------
-
--type(trie_node_id() :: binary() | atom()).
-
--record(trie_node, {
-          node_id        :: trie_node_id(),
-          edge_count = 0 :: non_neg_integer(),
-          topic          :: binary() | undefined,
-          flags          :: list(atom())
-        }).
-
--record(trie_edge, {
-          node_id :: trie_node_id(),
-          word    :: binary() | atom()
-        }).
-
--record(trie, {
-          edge    :: #trie_edge{},
-          node_id :: trie_node_id()
-        }).
-
-%%--------------------------------------------------------------------
-%% Alarm
-%%--------------------------------------------------------------------
-
--record(alarm, {
-          id        :: binary(),
-          severity  :: notice | warning | error | critical,
-          title     :: iolist(),
-          summary   :: iolist(),
-          timestamp :: erlang:timestamp()
-        }).
-
-%%--------------------------------------------------------------------
 %% Plugin
 %%--------------------------------------------------------------------
 
 -record(plugin, {
           name           :: atom(),
-          version        :: string(),
-          dir            :: string(),
+          dir            :: string() | undefined,
           descr          :: string(),
-          vendor         :: string(),
+          vendor         :: string() | undefined,
           active = false :: boolean(),
-          info           :: map(),
+          info   = #{}   :: map(),
           type           :: atom()
         }).
 
@@ -154,15 +120,14 @@
 %% Banned
 %%--------------------------------------------------------------------
 
--type(banned_who() ::  {client_id,  binary()}
-                     | {username,   binary()}
-                     | {ip_address, inet:ip_address()}).
-
 -record(banned, {
-          who    :: banned_who(),
-          reason :: binary(),
+          who    :: {clientid,  binary()}
+                  | {peerhost, inet:ip_address()}
+                  | {username,   binary()}
+                  | {ip_address, inet:ip_address()},
           by     :: binary(),
-          desc   :: binary(),
+          reason :: binary(),
+          at     :: integer(),
           until  :: integer()
         }).
 

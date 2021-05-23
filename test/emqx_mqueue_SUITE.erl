@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,14 +19,26 @@
 -compile(export_all).
 -compile(nowarn_export_all).
 
--include("emqx.hrl").
--include("emqx_mqtt.hrl").
+-include_lib("emqx/include/emqx.hrl").
+-include_lib("emqx/include/emqx_mqtt.hrl").
 
 -include_lib("eunit/include/eunit.hrl").
 
 -define(Q, emqx_mqueue).
 
 all() -> emqx_ct:all(?MODULE).
+
+t_info(_) ->
+    Q = ?Q:init(#{max_len => 5, store_qos0 => true}),
+    true = ?Q:info(store_qos0, Q),
+    5 = ?Q:info(max_len, Q),
+    0 = ?Q:info(len, Q),
+    0 = ?Q:info(dropped, Q),
+    #{store_qos0 := true,
+      max_len    := 5,
+      len        := 0,
+      dropped    := 0
+     } = ?Q:info(Q).
 
 t_in(_) ->
     Opts = #{max_len => 5, store_qos0 => true},
@@ -143,4 +155,11 @@ t_length_priority_mqueue(_) ->
     ?assertEqual(2, ?Q:len(Q4)),
     {{value, _Val}, Q5} = ?Q:out(Q4),
     ?assertEqual(1, ?Q:len(Q5)).
+
+t_dropped(_) ->
+    Q = ?Q:init(#{max_len => 1, store_qos0 => true}),
+    Msg = emqx_message:make(<<"t">>, <<"payload">>),
+    {undefined, Q1} = ?Q:in(Msg, Q),
+    {Msg, Q2} = ?Q:in(Msg, Q1),
+    ?assertEqual(1, ?Q:dropped(Q2)).
 

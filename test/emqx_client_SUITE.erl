@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@
 
 -import(lists, [nth/2]).
 
--include("emqx_mqtt.hrl").
+-include_lib("emqx/include/emqx_mqtt.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("common_test/include/ct.hrl").
 
@@ -45,7 +45,8 @@
 all() ->
     [{group, mqttv3},
      {group, mqttv4},
-     {group, mqttv5}
+     {group, mqttv5},
+     {group, others}
     ].
 
 groups() ->
@@ -66,15 +67,27 @@ groups() ->
       ]},
      {mqttv5, [non_parallel_tests],
       [t_basic_with_props_v5
+      ]},
+     {others, [non_parallel_tests],
+      [t_username_as_clientid,
+       t_certcn_as_clientid_default_config_tls,
+       t_certcn_as_clientid_tlsv1_3,
+       t_certcn_as_clientid_tlsv1_2
       ]}
     ].
 
 init_per_suite(Config) ->
-    emqx_ct_helpers:start_apps([]),
+    emqx_ct_helpers:boot_modules(all),
+    emqx_ct_helpers:start_apps([], fun set_special_confs/1),
     Config.
 
 end_per_suite(_Config) ->
     emqx_ct_helpers:stop_apps([]).
+
+set_special_confs(emqx) ->
+    emqx_ct_helpers:change_emqx_opts(ssl_twoway, [{peer_cert_as_username, cn}]);
+set_special_confs(_) ->
+    ok.
 
 %%--------------------------------------------------------------------
 %% Test cases for MQTT v3
@@ -94,13 +107,14 @@ t_cm(_) ->
     IdleTimeout = emqx_zone:get_env(external, idle_timeout, 30000),
     emqx_zone:set_env(external, idle_timeout, 1000),
     ClientId = <<"myclient">>,
-    {ok, C} = emqtt:start_link([{client_id, ClientId}]),
+    {ok, C} = emqtt:start_link([{clientid, ClientId}]),
     {ok, _} = emqtt:connect(C),
-    #{client := #{client_id := ClientId}} = emqx_cm:get_chan_attrs(ClientId),
+    ct:sleep(500),
+    #{clientinfo := #{clientid := ClientId}} = emqx_cm:get_chan_info(ClientId),
     emqtt:subscribe(C, <<"mytopic">>, 0),
     ct:sleep(1200),
     Stats = emqx_cm:get_chan_stats(ClientId),
-    ?assertEqual(1, proplists:get_value(subscriptions, Stats)),
+    ?assertEqual(1, proplists:get_value(subscriptions_cnt, Stats)),
     emqx_zone:set_env(external, idle_timeout, IdleTimeout).
 
 t_cm_registry(_) ->
@@ -108,10 +122,7 @@ t_cm_registry(_) ->
     {_, Pid, _, _} = lists:keyfind(registry, 1, Info),
     ignored = gen_server:call(Pid, <<"Unexpected call">>),
     gen_server:cast(Pid, <<"Unexpected cast">>),
-    Pid ! <<"Unexpected info">>,
-    ok = application:stop(mnesia),
-    emqx_ct_helpers:stop_apps([]),
-    emqx_ct_helpers:start_apps([]).
+    Pid ! <<"Unexpected info">>.
 
 t_will_message(_Config) ->
     {ok, C1} = emqtt:start_link([{clean_start, true},
@@ -133,13 +144,13 @@ t_will_message(_Config) ->
 
 t_offline_message_queueing(_) ->
     {ok, C1} = emqtt:start_link([{clean_start, false},
-                                       {client_id, <<"c1">>}]),
+                                       {clientid, <<"c1">>}]),
     {ok, _} = emqtt:connect(C1),
 
     {ok, _, [2]} = emqtt:subscribe(C1, nth(6, ?WILD_TOPICS), 2),
     ok = emqtt:disconnect(C1),
     {ok, C2} = emqtt:start_link([{clean_start, true},
-                                       {client_id, <<"c2">>}]),
+                                       {clientid, <<"c2">>}]),
     {ok, _} = emqtt:connect(C2),
 
     ok = emqtt:publish(C2, nth(2, ?TOPICS), <<"qos 0">>, 0),
@@ -147,8 +158,7 @@ t_offline_message_queueing(_) ->
     {ok, _} = emqtt:publish(C2, nth(4, ?TOPICS), <<"qos 2">>, 2),
     timer:sleep(10),
     emqtt:disconnect(C2),
-    {ok, C3} = emqtt:start_link([{clean_start, false},
-                                       {client_id, <<"c1">>}]),
+    {ok, C3} = emqtt:start_link([{clean_start, false}, {clientid, <<"c1">>}]),
     {ok, _} = emqtt:connect(C3),
 
     timer:sleep(10),
@@ -196,8 +206,7 @@ t_overlapping_subscriptions(_) ->
 
 t_redelivery_on_reconnect(_) ->
     ct:pal("Redelivery on reconnect test starting"),
-    {ok, C1} = emqtt:start_link([{clean_start, false},
-                                       {client_id, <<"c">>}]),
+    {ok, C1} = emqtt:start_link([{clean_start, false}, {clientid, <<"c">>}]),
     {ok, _} = emqtt:connect(C1),
 
     {ok, _, [2]} = emqtt:subscribe(C1, nth(7, ?WILD_TOPICS), 2),
@@ -210,8 +219,7 @@ t_redelivery_on_reconnect(_) ->
     timer:sleep(10),
     ok = emqtt:disconnect(C1),
     ?assertEqual(0, length(recv_msgs(2))),
-    {ok, C2} = emqtt:start_link([{clean_start, false},
-                                       {client_id, <<"c">>}]),
+    {ok, C2} = emqtt:start_link([{clean_start, false}, {clientid, <<"c">>}]),
     {ok, _} = emqtt:connect(C2),
 
     timer:sleep(10),
@@ -252,7 +260,7 @@ t_basic_with_props_v5(_) ->
 %% General test cases.
 %%--------------------------------------------------------------------
 
-t_basic(Opts) ->
+t_basic(_Opts) ->
     Topic = nth(1, ?TOPICS),
     {ok, C} = emqtt:start_link([{proto_ver, v4}]),
     {ok, _} = emqtt:connect(C),
@@ -263,6 +271,27 @@ t_basic(Opts) ->
     {ok, _} = emqtt:publish(C, Topic, <<"qos 2">>, 2),
     ?assertEqual(3, length(recv_msgs(3))),
     ok = emqtt:disconnect(C).
+
+t_username_as_clientid(_) ->
+    emqx_zone:set_env(external, use_username_as_clientid, true),
+    Username = <<"usera">>,
+    {ok, C} = emqtt:start_link([{username, Username}]),
+    {ok, _} = emqtt:connect(C),
+    #{clientinfo := #{clientid := Username}} = emqx_cm:get_chan_info(Username),
+    emqtt:disconnect(C).
+
+
+
+t_certcn_as_clientid_default_config_tls(_) ->
+    tls_certcn_as_clientid(default).
+
+t_certcn_as_clientid_tlsv1_3(_) ->
+    tls_certcn_as_clientid('tlsv1.3').
+
+t_certcn_as_clientid_tlsv1_2(_) ->
+    tls_certcn_as_clientid('tlsv1.2').
+
+
 
 %%--------------------------------------------------------------------
 %% Helper functions
@@ -281,3 +310,29 @@ recv_msgs(Count, Msgs) ->
     after 100 ->
         Msgs
     end.
+
+
+confirm_tls_version( Client, RequiredProtocol ) ->
+    Info = emqtt:info(Client),
+    SocketInfo = proplists:get_value( socket, Info ),
+    %% emqtt_sock has #ssl_socket.ssl
+    SSLSocket = element( 3, SocketInfo ),
+    { ok, SSLInfo } = ssl:connection_information(SSLSocket),
+    Protocol = proplists:get_value( protocol, SSLInfo ),
+    RequiredProtocol = Protocol.
+
+
+tls_certcn_as_clientid(default = TLSVsn) ->
+    tls_certcn_as_clientid(TLSVsn, 'tlsv1.3');
+tls_certcn_as_clientid(TLSVsn) ->
+    tls_certcn_as_clientid(TLSVsn, TLSVsn).
+
+tls_certcn_as_clientid(TLSVsn, RequiredTLSVsn) ->
+    CN = <<"Client">>,
+    emqx_zone:set_env(external, use_username_as_clientid, true),
+    SslConf = emqx_ct_helpers:client_ssl_twoway(TLSVsn),
+    {ok, Client} = emqtt:start_link([{port, 8883}, {ssl, true}, {ssl_opts, SslConf}]),
+    {ok, _} = emqtt:connect(Client),
+    #{clientinfo := #{clientid := CN}} = emqx_cm:get_chan_info(CN),
+    confirm_tls_version( Client, RequiredTLSVsn ),
+    emqtt:disconnect(Client).

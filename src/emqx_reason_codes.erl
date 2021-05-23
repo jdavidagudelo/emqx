@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,8 +23,10 @@
         , name/2
         , text/1
         , text/2
+        ]).
+
+-export([ frame_error/1
         , connack_error/1
-        , puback/1
         ]).
 
 -export([compat/2]).
@@ -48,7 +50,7 @@ name(16#11) -> no_subscription_existed;
 name(16#18) -> continue_authentication;
 name(16#19) -> re_authenticate;
 name(16#80) -> unspecified_error;
-name(16#81) -> malformed_Packet;
+name(16#81) -> malformed_packet;
 name(16#82) -> protocol_error;
 name(16#83) -> implementation_specific_error;
 name(16#84) -> unsupported_protocol_version;
@@ -164,6 +166,10 @@ compat(suback, Code) when Code >= 16#80  -> 16#80;
 compat(unsuback, _Code) -> undefined;
 compat(_Other, _Code) -> undefined.
 
+frame_error(frame_too_large) -> ?RC_PACKET_TOO_LARGE;
+frame_error(_) -> ?RC_MALFORMED_PACKET.
+
+connack_error(protocol_error) -> ?RC_PROTOCOL_ERROR;
 connack_error(client_identifier_not_valid) -> ?RC_CLIENT_IDENTIFIER_NOT_VALID;
 connack_error(bad_username_or_password) -> ?RC_BAD_USER_NAME_OR_PASSWORD;
 connack_error(bad_clientid_or_password) -> ?RC_BAD_USER_NAME_OR_PASSWORD;
@@ -174,8 +180,6 @@ connack_error(server_unavailable) -> ?RC_SERVER_UNAVAILABLE;
 connack_error(server_busy) -> ?RC_SERVER_BUSY;
 connack_error(banned) -> ?RC_BANNED;
 connack_error(bad_authentication_method) -> ?RC_BAD_AUTHENTICATION_METHOD;
+%% TODO: ???
 connack_error(_) -> ?RC_NOT_AUTHORIZED.
 
-%%TODO: This function should be removed.
-puback([]) -> ?RC_NO_MATCHING_SUBSCRIBERS;
-puback(L) when is_list(L) -> ?RC_SUCCESS.

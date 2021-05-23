@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 -compile(export_all).
 -compile(nowarn_export_all).
 
--include("emqx.hrl").
+-include_lib("emqx/include/emqx.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(R, emqx_router).
@@ -27,6 +27,7 @@
 all() -> emqx_ct:all(?MODULE).
 
 init_per_suite(Config) ->
+    emqx_ct_helpers:boot_modules([router]),
     emqx_ct_helpers:start_apps([]),
     Config.
 
@@ -43,6 +44,24 @@ end_per_testcase(_TestCase, _Config) ->
 t_mnesia(_) ->
     %% for coverage
     ok = emqx_router:mnesia(copy).
+
+% t_add_route(_) ->
+%     error('TODO').
+
+% t_do_add_route(_) ->
+%     error('TODO').
+
+% t_lookup_routes(_) ->
+%     error('TODO').
+
+% t_delete_route(_) ->
+%     error('TODO').
+
+% t_do_delete_route(_) ->
+%     error('TODO').
+
+% t_topics(_) ->
+%     error('TODO').
 
 t_add_delete(_) ->
     ?R:add_route(<<"a/b/c">>),

@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,6 +23,12 @@
 
 all() -> emqx_ct:all(?MODULE).
 
+% t_new(_) ->
+%     error('TODO').
+
+% t_count(_) ->
+%     error('TODO').
+
 t_monitor(_) ->
     PMon = emqx_pmon:new(),
     PMon1 = emqx_pmon:monitor(self(), PMon),
@@ -30,6 +36,9 @@ t_monitor(_) ->
     PMon2 = emqx_pmon:demonitor(self(), PMon1),
     PMon2 = emqx_pmon:demonitor(self(), PMon2),
     ?assertEqual(0, emqx_pmon:count(PMon2)).
+
+% t_demonitor(_) ->
+%     error('TODO').
 
 t_find(_) ->
     PMon = emqx_pmon:new(),
@@ -51,3 +60,5 @@ t_erase(_) ->
     ?assertEqual([{self(), val}], Items),
     ?assertEqual(0, emqx_pmon:count(PMon3)).
 
+% t_erase_all(_) ->
+%     error('TODO').

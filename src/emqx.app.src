@@ -1,14 +1,15 @@
-{application, emqx, [
-  {id, "emqx"},
-  {vsn, "git"},
-  {description, "EMQ X Broker"},
+{application, emqx,
+ [{id, "emqx"},
+  {description, "EMQ X"},
+  {vsn, "4.3.1"}, % strict semver, bump manually!
   {modules, []},
   {registered, []},
-  {applications, [kernel,stdlib,jsx,gproc,gen_rpc,esockd,cowboy,
-                  sasl,os_mon]},
-  {env, []},
+  {applications, [kernel,stdlib,gproc,gen_rpc,esockd,cowboy,sasl,os_mon]},
   {mod, {emqx_app,[]}},
-  {maintainers, ["Feng Lee <feng@emqx.io>"]},
+  {env, []},
   {licenses, ["Apache-2.0"]},
-  {links, [{"Github", "https://github.com/emqx/emqx"}]}
+  {maintainers, ["EMQ X Team <contact@emqx.io>"]},
+  {links, [{"Homepage", "https://emqx.io/"},
+           {"Github", "https://github.com/emqx/emqx"}
+          ]}
 ]}.

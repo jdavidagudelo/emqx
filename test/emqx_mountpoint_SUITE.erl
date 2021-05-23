@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@
         , replvar/2
         ]).
 
--include("emqx.hrl").
+-include_lib("emqx/include/emqx.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 all() -> emqx_ct:all(?MODULE).
@@ -56,12 +56,12 @@ t_replvar(_) ->
     ?assertEqual(undefined, replvar(undefined, #{})),
     ?assertEqual(<<"mount/user/clientid/">>,
                  replvar(<<"mount/%u/%c/">>,
-                         #{client_id => <<"clientid">>,
+                         #{clientid => <<"clientid">>,
                            username => <<"user">>
                           })),
     ?assertEqual(<<"mount/%u/clientid/">>,
                  replvar(<<"mount/%u/%c/">>,
-                         #{client_id => <<"clientid">>,
+                         #{clientid => <<"clientid">>,
                            username => undefined
                           })).
 

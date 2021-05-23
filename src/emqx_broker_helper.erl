@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -43,6 +43,11 @@
         , code_change/3
         ]).
 
+-ifdef(TEST).
+-compile(export_all).
+-compile(nowarn_export_all).
+-endif.
+
 -define(HELPER, ?MODULE).
 -define(SUBID, emqx_subid).
 -define(SUBMON, emqx_submon).
@@ -70,7 +75,7 @@ register_sub(SubPid, SubId) when is_pid(SubPid) ->
 lookup_subid(SubPid) when is_pid(SubPid) ->
     emqx_tables:lookup_value(?SUBMON, SubPid).
 
--spec(lookup_subpid(emqx_types:subid()) -> pid()).
+-spec(lookup_subpid(emqx_types:subid()) -> maybe(pid())).
 lookup_subpid(SubId) ->
     emqx_tables:lookup_value(?SUBID, SubId).
 

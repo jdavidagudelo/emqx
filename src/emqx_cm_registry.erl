@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -62,11 +62,11 @@ start_link() ->
 %% @doc Is the global registry enabled?
 -spec(is_enabled() -> boolean()).
 is_enabled() ->
-    emqx_config:get_env(enable_channel_registry, true).
+    emqx:get_env(enable_session_registry, true).
 
 %% @doc Register a global channel.
--spec(register_channel(emqx_types:client_id()
-                    | {emqx_types:client_id(), pid()}) -> ok).
+-spec(register_channel(emqx_types:clientid()
+                    | {emqx_types:clientid(), pid()}) -> ok).
 register_channel(ClientId) when is_binary(ClientId) ->
     register_channel({ClientId, self()});
 
@@ -77,8 +77,8 @@ register_channel({ClientId, ChanPid}) when is_binary(ClientId), is_pid(ChanPid) 
     end.
 
 %% @doc Unregister a global channel.
--spec(unregister_channel(emqx_types:client_id()
-                      | {emqx_types:client_id(), pid()}) -> ok).
+-spec(unregister_channel(emqx_types:clientid()
+                      | {emqx_types:clientid(), pid()}) -> ok).
 unregister_channel(ClientId) when is_binary(ClientId) ->
     unregister_channel({ClientId, self()});
 
@@ -89,7 +89,7 @@ unregister_channel({ClientId, ChanPid}) when is_binary(ClientId), is_pid(ChanPid
     end.
 
 %% @doc Lookup the global channels.
--spec(lookup_channels(emqx_types:client_id()) -> list(pid())).
+-spec(lookup_channels(emqx_types:clientid()) -> list(pid())).
 lookup_channels(ClientId) ->
     [ChanPid || #channel{pid = ChanPid} <- mnesia:dirty_read(?TAB, ClientId)].
 
@@ -108,7 +108,7 @@ init([]) ->
                 {attributes, record_info(fields, channel)},
                 {storage_properties, [{ets, [{read_concurrency, true},
                                              {write_concurrency, true}]}]}]),
-    ok = ekka_mnesia:copy_table(?TAB),
+    ok = ekka_mnesia:copy_table(?TAB, ram_copies),
     ok = ekka:monitor(membership),
     {ok, #{}}.
 

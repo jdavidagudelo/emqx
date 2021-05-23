@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2018-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -24,9 +24,9 @@
 all() -> emqx_ct:all(?MODULE).
 
 t_update_counter(_) ->
-    ?assertEqual(undefined, emqx_pd:update_counter(bytes, 1)),
-    ?assertEqual(1, emqx_pd:update_counter(bytes, 1)),
-    ?assertEqual(2, emqx_pd:update_counter(bytes, 1)),
+    ?assertEqual(undefined, emqx_pd:inc_counter(bytes, 1)),
+    ?assertEqual(1, emqx_pd:inc_counter(bytes, 1)),
+    ?assertEqual(2, emqx_pd:inc_counter(bytes, 1)),
     ?assertEqual(3, emqx_pd:get_counter(bytes)),
     ?assertEqual(3, emqx_pd:reset_counter(bytes)),
     ?assertEqual(0, emqx_pd:get_counter(bytes)).

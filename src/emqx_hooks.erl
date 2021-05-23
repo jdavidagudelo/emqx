@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -31,10 +31,16 @@
 -export([ add/2
         , add/3
         , add/4
+        , put/2
         , del/2
         , run/2
         , run_fold/3
         , lookup/1
+        ]).
+
+-export([ callback_action/1
+        , callback_filter/1
+        , callback_priority/1
         ]).
 
 %% gen_server Function Exports
@@ -60,12 +66,12 @@
 %%     equal priority values.
 
 -type(hookpoint() :: atom()).
--type(action() :: function() | mfa()).
--type(filter() :: function() | mfa()).
+-type(action() :: function() | {function(), [term()]} | mfargs()).
+-type(filter() :: function() | mfargs()).
 
 -record(callback, {
           action :: action(),
-          filter :: filter(),
+          filter :: maybe(filter()),
           priority :: integer()
          }).
 
@@ -85,6 +91,19 @@ start_link() ->
 -spec(stop() -> ok).
 stop() ->
     gen_server:stop(?SERVER, normal, infinity).
+
+%%--------------------------------------------------------------------
+%% Test APIs
+%%--------------------------------------------------------------------
+
+%% @doc Get callback action.
+callback_action(#callback{action = A}) -> A.
+
+%% @doc Get callback filter.
+callback_filter(#callback{filter = F}) -> F.
+
+%% @doc Get callback priority.
+callback_priority(#callback{priority= P}) -> P.
 
 %%--------------------------------------------------------------------
 %% Hooks API
@@ -111,8 +130,16 @@ add(HookPoint, Action, Priority) when is_integer(Priority) ->
 add(HookPoint, Action, Filter, Priority) when is_integer(Priority) ->
     add(HookPoint, #callback{action = Action, filter = Filter, priority = Priority}).
 
+%% @doc Like add/2, it register a callback, discard 'already_exists' error.
+-spec(put(hookpoint(), action() | #callback{}) -> ok).
+put(HookPoint, Callback) ->
+    case add(HookPoint, Callback) of
+        ok -> ok;
+        {error, already_exists} -> ok
+    end.
+
 %% @doc Unregister a callback.
--spec(del(hookpoint(), action()) -> ok).
+-spec(del(hookpoint(), action() | {module(), atom()}) -> ok).
 del(HookPoint, Action) ->
     gen_server:cast(?SERVER, {del, HookPoint, Action}).
 
@@ -127,7 +154,7 @@ run_fold(HookPoint, Args, Acc) ->
     do_run_fold(lookup(HookPoint), Args, Acc).
 
 do_run([#callback{action = Action, filter = Filter} | Callbacks], Args) ->
-    case filter_passed(Filter, Args) andalso execute(Action, Args) of
+    case filter_passed(Filter, Args) andalso safe_execute(Action, Args) of
         %% stop the hook chain and return
         stop -> ok;
         %% continue the hook chain, in following cases:
@@ -140,7 +167,7 @@ do_run([], _Args) ->
 
 do_run_fold([#callback{action = Action, filter = Filter} | Callbacks], Args, Acc) ->
     Args1 = Args ++ [Acc],
-    case filter_passed(Filter, Args1) andalso execute(Action, Args1) of
+    case filter_passed(Filter, Args1) andalso safe_execute(Action, Args1) of
         %% stop the hook chain
         stop -> Acc;
         %% stop the hook chain with NewAcc
@@ -159,6 +186,15 @@ do_run_fold([], _Args, Acc) ->
 filter_passed(undefined, _Args) -> true;
 filter_passed(Filter, Args) ->
     execute(Filter, Args).
+
+safe_execute(Fun, Args) ->
+    try execute(Fun, Args) of
+        Result -> Result
+    catch
+        Error:Reason:Stacktrace ->
+            ?LOG(error, "Failed to execute ~0p: ~0p", [Fun, {Error, Reason, Stacktrace}]),
+            ok
+    end.
 
 %% @doc execute a function.
 execute(Fun, Args) when is_function(Fun) ->

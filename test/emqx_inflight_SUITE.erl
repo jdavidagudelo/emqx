@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2017-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@
 -include_lib("emqx_ct_helpers/include/emqx_ct.hrl").
 
 all() -> emqx_ct:all(?MODULE).
-
+    
 t_contain(_) ->
     Inflight = emqx_inflight:insert(k, v, emqx_inflight:new()),
     ?assert(emqx_inflight:contain(k, Inflight)),
@@ -84,8 +84,11 @@ t_is_empty(_) ->
     ?assert(emqx_inflight:is_empty(Inflight1)).
 
 t_window(_) ->
+    ?assertEqual([], emqx_inflight:window(emqx_inflight:new(0))),
     Inflight = emqx_inflight:insert(
                  b, 2, emqx_inflight:insert(
                          a, 1, emqx_inflight:new(2))),
-    [a, b] = emqx_inflight:window(Inflight).
+    ?assertEqual([a, b], emqx_inflight:window(Inflight)).
 
+% t_to_list(_) ->
+%     error('TODO').

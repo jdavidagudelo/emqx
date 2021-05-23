@@ -1,4 +1,4 @@
-%% Copyright (c) 2013-2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2013-2021 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -17,11 +17,12 @@
 -compile(export_all).
 -compile(nowarn_export_all).
 
--include("emqx_mqtt.hrl").
+-include_lib("emqx/include/emqx_mqtt.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("common_test/include/ct.hrl").
 
 init_per_suite(Config) ->
+    emqx_ct_helpers:boot_modules(all),
     emqx_ct_helpers:start_apps([]),
     Config.
 
@@ -41,7 +42,7 @@ request_response_per_qos(QoS) ->
     RspTopic = <<"response_topic">>,
     {ok, Requester} = emqx_request_sender:start_link(RspTopic, QoS,
                                                      [{proto_ver, v5},
-                                                      {client_id, <<"requester">>},
+                                                      {clientid, <<"requester">>},
                                                       {properties, #{ 'Request-Response-Information' => 1}}]),
     %% This is a square service
     Square = fun(_CorrData, ReqBin) ->
@@ -50,7 +51,7 @@ request_response_per_qos(QoS) ->
               end,
     {ok, Responser} = emqx_request_handler:start_link(ReqTopic, QoS, Square,
                                                       [{proto_ver, v5},
-                                                       {client_id, <<"responser">>}
+                                                       {clientid, <<"responser">>}
                                                       ]),
     ok = emqx_request_sender:send(Requester, ReqTopic, RspTopic, <<"corr-1">>, <<"2">>, QoS),
     receive
